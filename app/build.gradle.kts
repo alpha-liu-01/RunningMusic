@@ -15,7 +15,7 @@ androidComponents {
         val mainOutput = variant.outputs.single { it.outputType == VariantOutputConfiguration.OutputType.SINGLE }
 
         @Suppress("UnstableApiUsage")
-        mainOutput.outputFileName = "Chocola_${mainOutput.versionName.get()}.apk"
+        mainOutput.outputFileName = "RunningMusic_${mainOutput.versionName.get()}.apk"
     }
 }
 
@@ -51,6 +51,33 @@ android {
                 keyPassword = System.getenv("SIGNING_KEY_PASSWORD")
             } else {
                 println("No keystore found, APK will be unsigned")
+            }
+        }
+
+        // A single dev keystore shared between this machine and CI, so debug
+        // builds from either source install over each other instead of failing
+        // with INSTALL_FAILED_UPDATE_INCOMPATIBLE. Falls back to the per-machine
+        // ~/.android/debug.keystore when it isn't configured.
+        getByName("debug") {
+            val devKeystore = file(
+                providers.gradleProperty("runningmusic.devKeystore")
+                    .orElse(
+                        providers.systemProperty("user.home")
+                            .map { "$it/.android/runningmusic-dev.jks" }
+                    )
+                    .get()
+            )
+            val devStorePassword = providers.gradleProperty("runningmusic.devKeystorePassword").orNull
+
+            if (devKeystore.exists() && devStorePassword != null) {
+                storeFile = devKeystore
+                storePassword = devStorePassword
+                keyAlias = providers.gradleProperty("runningmusic.devKeyAlias")
+                    .getOrElse("runningmusic-dev")
+                keyPassword = providers.gradleProperty("runningmusic.devKeyPassword")
+                    .getOrElse(devStorePassword)
+            } else {
+                println("No dev keystore configured, debug APK will use the default debug key")
             }
         }
     }

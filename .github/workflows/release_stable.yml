@@ -42,7 +42,7 @@ jobs:
         SIGNING_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
     - uses: actions/upload-artifact@v4
       with:
-        name: CuteMusic Release
+        name: RunningMusic Release
         path: app/build/**/*.apk
 
   release:
@@ -51,7 +51,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: CuteMusic Release
+          name: RunningMusic Release
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
