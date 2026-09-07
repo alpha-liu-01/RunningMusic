@@ -10,6 +10,8 @@ import androidx.lifecycle.viewModelScope
 import com.kyant.taglib.TagLib
 import com.sosauce.chocola.R
 import com.sosauce.chocola.data.models.CuteTrack
+import lol.alphaliu01.runningmusic.library.TrackMetadataRepository
+import lol.alphaliu01.runningmusic.library.trackKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,15 +20,54 @@ import kotlinx.coroutines.launch
 
 class TracksDetailsDialogViewModel(
     private val track: CuteTrack,
-    private val application: Application
+    private val application: Application,
+    private val trackMetadataRepository: TrackMetadataRepository
 ) : AndroidViewModel(application) {
 
-    private val _state = MutableStateFlow(TracksDetailsState())
+    private val _state = MutableStateFlow(
+        TracksDetailsState(hasFileIdentity = track.trackKey != null)
+    )
     val state = _state.asStateFlow()
 
 
     init {
         loadFileDetails()
+        observeStoredBpm()
+    }
+
+    /**
+     * The stored tempo is the source of truth, so the field follows the
+     * database rather than the other way round. That also means a value saved
+     * here shows up immediately anywhere else reading the same row.
+     */
+    private fun observeStoredBpm() {
+        viewModelScope.launch {
+            trackMetadataRepository.observe(track).collect { metadata ->
+                val stored = metadata?.bpm
+
+                _state.update {
+                    // Don't fight the keyboard: only adopt the stored value
+                    // when it actually differs from what is already typed.
+                    if (it.bpm.toFloatOrNull() == stored) it
+                    else it.copy(bpm = stored?.formatBpm().orEmpty())
+                }
+            }
+        }
+    }
+
+    fun setBpmText(text: String) {
+        // A tempo is a positive number, so anything else simply isn't typed.
+        val filtered = text.filter { it.isDigit() || it == '.' }
+
+        _state.update { it.copy(bpm = filtered) }
+    }
+
+    fun saveBpm() {
+        val bpm = _state.value.bpm.trim().toFloatOrNull()?.takeIf { it > 0f }
+
+        viewModelScope.launch {
+            trackMetadataRepository.setManualBpm(track, bpm)
+        }
     }
 
 
@@ -190,4 +231,14 @@ data class TracksDetailsState(
     val isLoading: Boolean = true,
     val trackInfo: List<TrackDetails> = emptyList(),
     val fileInfo: List<TrackDetails> = emptyList(),
+    val bpm: String = "",
+    /**
+     * False for the ad-hoc track QuickPlay builds out of player metadata, which
+     * has no file behind it and so cannot be stored against.
+     */
+    val hasFileIdentity: Boolean = true
 )
+
+/** Whole numbers are the common case, so don't show them a pointless ".0". */
+private fun Float.formatBpm(): String =
+    if (this == toInt().toFloat()) toInt().toString() else toString()

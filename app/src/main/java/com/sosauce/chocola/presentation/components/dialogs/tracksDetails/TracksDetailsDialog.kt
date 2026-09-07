@@ -19,6 +19,8 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -26,6 +28,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -37,6 +40,8 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
@@ -168,6 +173,29 @@ fun TracksDetailsDialog(
                         }
 
                         item(
+                            key = "Cadence",
+                            span = { GridItemSpan(maxLineSpan) }
+                        ) {
+                            Text(
+                                text = stringResource(R.string.cadence),
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 15.dp, vertical = 4.dp)
+                            )
+                        }
+
+                        item(
+                            key = "BPM",
+                            span = { GridItemSpan(maxLineSpan) }
+                        ) {
+                            BpmEntry(
+                                bpm = state.bpm,
+                                enabled = state.hasFileIdentity,
+                                onBpmChange = viewModel::setBpmText,
+                                onSave = viewModel::saveBpm
+                            )
+                        }
+
+                        item(
                             key = "About file",
                             span = { GridItemSpan(maxLineSpan) }
                         ) {
@@ -218,6 +246,84 @@ fun TracksDetailsDialog(
         )
     }
 
+}
+
+/**
+ * The one editable field in an otherwise read-only dialog. It exists so the
+ * whole metadata store can be exercised end to end before any tempo detection
+ * is written.
+ */
+@Composable
+private fun BpmEntry(
+    bpm: String,
+    enabled: Boolean,
+    onBpmChange: (String) -> Unit,
+    onSave: () -> Unit
+) {
+    Card(
+        modifier = Modifier.padding(1.dp),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest)
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.eq),
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    text = stringResource(R.string.bpm),
+                    style = MaterialTheme.typography.labelSmallEmphasized
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+
+            if (!enabled) {
+                Text(
+                    text = stringResource(R.string.bpm_no_file_identity),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                return@Card
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = bpm,
+                    onValueChange = onBpmChange,
+                    placeholder = { Text(stringResource(R.string.bpm_hint)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Decimal,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { onSave() }),
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(5.dp))
+                TextButton(
+                    onClick = onSave,
+                    shapes = ButtonDefaults.shapes()
+                ) {
+                    Text(text = stringResource(R.string.save))
+                }
+            }
+            Spacer(Modifier.height(5.dp))
+            Text(
+                text = stringResource(R.string.bpm_manual_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
 }
 
 @Composable

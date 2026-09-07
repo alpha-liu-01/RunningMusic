@@ -267,6 +267,13 @@
         <item quantity="one">Delete playlist</item>
         <item quantity="other">Delete playlists</item>
     </plurals>
+    <!-- RunningMusic: cadence -->
+    <string name="cadence">Cadence</string>
+    <string name="bpm">BPM</string>
+    <string name="bpm_hint">Not set</string>
+    <string name="bpm_manual_desc">Type a tempo to match this track to your running cadence. Leave it empty to clear it.</string>
+    <string name="bpm_no_file_identity">This track has no file behind it, so nothing can be saved for it.</string>
+
     <plurals name="delete_tracks">
         <item quantity="one">Delete track</item>
         <item quantity="other">Delete tracks</item>
