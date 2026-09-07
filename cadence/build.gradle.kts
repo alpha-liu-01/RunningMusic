@@ -31,3 +31,15 @@ tasks.register<JavaExec>("bpmSurvey") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass = "lol.alphaliu01.runningmusic.cadence.cli.BpmSurveyKt"
 }
+
+// Run with:
+//   ./gradlew :cadence:recordingSummary --args="build/step-recordings --expected-steps 450"
+tasks.register<JavaExec>("recordingSummary") {
+    group = "verification"
+    description = "Summarises step recordings pulled off a device."
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "lol.alphaliu01.runningmusic.cadence.cli.RecordingSummaryKt"
+    // Paths on the command line are the ones the user typed, so resolve them
+    // against the repo root rather than against cadence/.
+    workingDir = rootDir
+}
