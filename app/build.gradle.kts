@@ -140,6 +140,12 @@ android {
             it.useJUnitPlatform()
         }
     }
+
+    // MigrationTestHelper reads the exported schemas off the device, so they
+    // have to be packaged into the test APK as assets.
+    sourceSets {
+        getByName("androidTest").assets.srcDirs(files("$projectDir/schemas"))
+    }
 }
 
 // Room exports a JSON schema per database version here. MigrationTestHelper
@@ -232,5 +238,11 @@ dependencies {
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.kotlin.test)
     testRuntimeOnly(libs.junit.platform.launcher)
+
+    // MigrationTestHelper is a JUnit 4 @Rule, so instrumented tests stay on
+    // JUnit 4 while the host tests above use JUnit 5.
+    androidTestImplementation(libs.androidx.room.testing)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }
 
