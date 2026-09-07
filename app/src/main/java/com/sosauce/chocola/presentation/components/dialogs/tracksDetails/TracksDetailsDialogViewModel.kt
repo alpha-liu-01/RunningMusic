@@ -10,13 +10,15 @@ import androidx.lifecycle.viewModelScope
 import com.kyant.taglib.TagLib
 import com.sosauce.chocola.R
 import com.sosauce.chocola.data.models.CuteTrack
-import lol.alphaliu01.runningmusic.library.TrackMetadataRepository
-import lol.alphaliu01.runningmusic.library.trackKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import lol.alphaliu01.runningmusic.library.TrackMetadataRepository
+import lol.alphaliu01.runningmusic.library.trackKey
 
 class TracksDetailsDialogViewModel(
     private val track: CuteTrack,
@@ -42,16 +44,16 @@ class TracksDetailsDialogViewModel(
      */
     private fun observeStoredBpm() {
         viewModelScope.launch {
-            trackMetadataRepository.observe(track).collect { metadata ->
-                val stored = metadata?.bpm
-
-                _state.update {
-                    // Don't fight the keyboard: only adopt the stored value
-                    // when it actually differs from what is already typed.
-                    if (it.bpm.toFloatOrNull() == stored) it
-                    else it.copy(bpm = stored?.formatBpm().orEmpty())
+            trackMetadataRepository.observe(track)
+                .map { it?.bpm }
+                // The query re-runs on any write to the table, including ones
+                // for other tracks. Only take over the field when this track's
+                // stored tempo actually changed, or a half-typed number would
+                // be replaced out from under the keyboard.
+                .distinctUntilChanged()
+                .collect { stored ->
+                    _state.update { it.copy(bpm = stored?.formatBpm().orEmpty()) }
                 }
-            }
         }
     }
 
