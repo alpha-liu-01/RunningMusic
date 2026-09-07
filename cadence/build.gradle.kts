@@ -21,6 +21,9 @@ tasks.test {
     testLogging {
         events("passed", "skipped", "failed")
     }
+    // So a test can reach a committed file, such as the corpus manifest, by the
+    // same path a person would type.
+    workingDir = rootDir
 }
 
 // Lives in the test source set so it never ships. Run with:
@@ -41,5 +44,16 @@ tasks.register<JavaExec>("recordingSummary") {
     mainClass = "lol.alphaliu01.runningmusic.cadence.cli.RecordingSummaryKt"
     // Paths on the command line are the ones the user typed, so resolve them
     // against the repo root rather than against cadence/.
+    workingDir = rootDir
+}
+
+// Needs bpm_probe built first, so scripts/bpm-eval.sh is the usual way in.
+// Directly:
+//   ./gradlew :cadence:bpmEval --args="--analyse-seconds 60"
+tasks.register<JavaExec>("bpmEval") {
+    group = "verification"
+    description = "Measures BPM estimation accuracy and recommends a confidence threshold."
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "lol.alphaliu01.runningmusic.cadence.cli.BpmEvalKt"
     workingDir = rootDir
 }

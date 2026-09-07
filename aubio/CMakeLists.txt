@@ -106,4 +106,10 @@ else()
     target_link_libraries(tempo_smoke PRIVATE aubio_tempo)
 
     add_test(NAME tempo_smoke COMMAND tempo_smoke)
+
+    # The measuring half of the accuracy harness. Not a test: it reads PCM on
+    # stdin and prints an estimate, and the Kotlin driver decides what that
+    # estimate is worth.
+    add_executable(bpm_probe "${CMAKE_CURRENT_SOURCE_DIR}/tools/bpm_probe.c")
+    target_link_libraries(bpm_probe PRIVATE aubio_tempo)
 endif()

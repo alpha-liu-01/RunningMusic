@@ -1,0 +1,34 @@
+# Ground truth for the BPM evaluation harness.
+#
+# Audio is never committed. This file points at a local directory, given to the
+# harness with --corpus, and records enough to prove that a later run measured
+# the same audio as an earlier one.
+#
+#   scripts/bpm-eval.sh --corpus ~/Music/bpm-corpus
+#
+# Tab separated. Blank lines and lines starting with # are ignored.
+#
+#   relative_path   Relative to the corpus root, so this file works on any
+#                   machine that has the audio.
+#   sha256          Of the file. Leave empty to skip the check while you are
+#                   still assembling the corpus; fill it in with
+#                   `sha256sum <file>` once the entry is settled. A mismatch is
+#                   reported and the track is skipped, because measuring
+#                   different audio under the same name makes two runs
+#                   incomparable without saying so.
+#   truth_bpm       The real tempo.
+#   truth_source    One of:
+#                     tapped     tapped out by hand. The good stuff.
+#                     tag        the file's own BPM tag. Only as good as
+#                                whatever wrote it, and note that a tag written
+#                                by another detector means grading a detector
+#                                against a detector.
+#                     published  stated by the release, label or dataset.
+#   notes           Free text. Worth using for anything that makes a track hard:
+#                   tempo changes, rubato, a long ambient intro, live drumming.
+#
+# There are no rows yet. Until there are, the harness runs on its synthetic
+# corpus alone, which is easier than real music and so reports an optimistic
+# figure. See docs/private/BPM_ACCURACY.md.
+#
+# relative_path	sha256	truth_bpm	truth_source	notes
