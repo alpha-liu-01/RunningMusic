@@ -22,3 +22,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "RunningMusic"
 include(":app")
+include(":cadence")
