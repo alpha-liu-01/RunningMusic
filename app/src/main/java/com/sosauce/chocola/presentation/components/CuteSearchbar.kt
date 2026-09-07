@@ -755,6 +755,15 @@ object CuteSearchbarDefaults {
                                         }
                                     }
                                     IconButton(
+                                        onClick = { onNavigate(Screen.Running) },
+                                        shapes = IconButtonDefaults.shapes()
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.directions_run),
+                                            contentDescription = stringResource(R.string.running_mode)
+                                        )
+                                    }
+                                    IconButton(
                                         onClick = { onNavigate(Screen.Settings) },
                                         shapes = IconButtonDefaults.shapes()
                                     ) {

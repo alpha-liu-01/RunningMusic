@@ -32,6 +32,7 @@ import com.sosauce.chocola.domain.helpers.AndroidAutoHelper
 import com.sosauce.chocola.utils.CUTE_MUSIC_ID
 import com.sosauce.chocola.utils.playOrPause
 import kotlinx.coroutines.launch
+import lol.alphaliu01.runningmusic.running.RunningModeManager
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 
@@ -42,6 +43,7 @@ class PlaybackService : MediaLibraryService(), KoinComponent {
     private val equalizerManager by inject<EqualizerManager>()
     private val androidAutoHelper by inject<AndroidAutoHelper>()
     private val widgetsHelper by inject<WidgetsHelper>()
+    private val runningMode by inject<RunningModeManager>()
     private val audioAttributes = AudioAttributes
         .Builder()
         .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
@@ -54,6 +56,18 @@ class PlaybackService : MediaLibraryService(), KoinComponent {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             super.onIsPlayingChanged(isPlaying)
             widgetsHelper.updateMusicWidgetData(WIDGET_IS_PLAYING, isPlaying)
+        }
+
+        /**
+         * Running mode recomputes playback speed here rather than in
+         * MusicViewModel, which has the only other listener for this event.
+         * On a run the screen is off and the activity is usually gone, so that
+         * listener has stopped existing while this service plays on; the speed
+         * would freeze wherever the last foreground track left it.
+         */
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            super.onMediaItemTransition(mediaItem, reason)
+            lifecycleScope.launch { runningMode.onTransition(mediaItem?.mediaId) }
         }
 
 
@@ -185,6 +199,7 @@ class PlaybackService : MediaLibraryService(), KoinComponent {
         )
 
         player.addListener(listener)
+        runningMode.attach(player)
 
     }
 
@@ -192,6 +207,7 @@ class PlaybackService : MediaLibraryService(), KoinComponent {
     @UnstableApi
     override fun onDestroy() {
         equalizerManager.releaseDynamicsProcessing()
+        runningMode.detach()
         mediaLibrarySession?.let {
             it.player.removeListener(listener)
             it.player.release()
@@ -206,6 +222,7 @@ class PlaybackService : MediaLibraryService(), KoinComponent {
     @UnstableApi
     override fun onTaskRemoved(rootIntent: Intent?) {
         equalizerManager.releaseDynamicsProcessing()
+        runningMode.detach()
         mediaLibrarySession?.let {
             it.player.removeListener(listener)
             it.player.release()

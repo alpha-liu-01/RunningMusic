@@ -42,6 +42,8 @@ import lol.alphaliu01.runningmusic.analysis.PcmDecoder
 import lol.alphaliu01.runningmusic.analysis.TempoAnalyser
 import lol.alphaliu01.runningmusic.analysis.ui.TempoAnalysisViewModel
 import lol.alphaliu01.runningmusic.library.TrackMetadataRepository
+import lol.alphaliu01.runningmusic.running.RunningModeManager
+import lol.alphaliu01.runningmusic.running.ui.RunningViewModel
 import lol.alphaliu01.runningmusic.steps.StepRecorder
 import lol.alphaliu01.runningmusic.steps.StepSensors
 import lol.alphaliu01.runningmusic.steps.dev.StepRecorderViewModel
@@ -92,6 +94,10 @@ val appModule = module {
     single { BpmAnalyser(decoder = get(), analyser = get(), tags = get(), config = get()) }
     single { BpmAnalysisManager(androidApplication()) }
 
+    // Running mode. A singleton rather than view model state because a run has
+    // to keep re-speeding the player after the activity that started it is gone.
+    singleOf(::RunningModeManager)
+
     // Debug-only step-detector spike. Registered unconditionally because the
     // dev screen that reaches it is gated on BuildConfig.DEBUG; nothing
     // constructs these in a release build.
@@ -117,5 +123,6 @@ val appModule = module {
     viewModelOf(::SettingsLibraryViewModel)
     viewModelOf(::TracksDetailsDialogViewModel)
     viewModelOf(::TempoAnalysisViewModel)
+    viewModelOf(::RunningViewModel)
     viewModelOf(::StepRecorderViewModel)
 }

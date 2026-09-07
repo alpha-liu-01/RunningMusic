@@ -36,6 +36,16 @@ data class ToleranceBand(
     fun accepts(fold: Fold): Boolean = accepts(fold.speed)
 
     /**
+     * [speed] pulled back inside the band.
+     *
+     * Used when the target cadence moves under a track that is already playing.
+     * The steps-per-beat exponent is frozen at that point, so a large enough
+     * drift would ask for a stretch nobody wants to hear; the track finishes
+     * slightly off the target instead.
+     */
+    fun clamp(speed: Double): Double = speed.coerceIn(minSpeed, maxSpeedUp)
+
+    /**
      * The track tempos this band accepts for [targetCadence], one window per
      * reachable steps-per-beat exponent.
      *

@@ -138,6 +138,19 @@ data object PreferencesKeys {
 
     val NOW_PLAYING_SHAPE_MORPH = booleanPreferencesKey("NOW_PLAYING_SHAPE_MORPH")
 
+    /**
+     * RunningMusic: the settings a run is started from, and a record that one was
+     * under way.
+     *
+     * The record exists because a run cannot survive the process being killed:
+     * the plan only lives in memory. What outlives it is the odd playback speed
+     * the run left behind in the saved music state, and this is how that speed is
+     * recognised as meaningless rather than restored.
+     */
+    val RUNNING_MODE_ENABLED = booleanPreferencesKey("RUNNING_MODE_ENABLED")
+    val RUNNING_TARGET_CADENCE = intPreferencesKey("RUNNING_TARGET_CADENCE")
+    val RUNNING_LENGTH_MINUTES = intPreferencesKey("RUNNING_LENGTH_MINUTES")
+
 }
 
 

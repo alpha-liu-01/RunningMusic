@@ -289,6 +289,33 @@
     <string name="tempo_analysis_charging_desc">Waits for the phone to be plugged in. Analysing a whole library is real work for a battery.</string>
     <string name="tempo_analysis_note">A tempo is stored only when two separate stretches of a track agree on it. Tracks that disagree with themselves are left without one rather than guessed at, because a wrong tempo plays a track at a wildly wrong speed.</string>
 
+    <!-- RunningMusic: running mode -->
+    <string name="running_mode">Running</string>
+    <string name="running_cadence">Target cadence</string>
+    <string name="running_cadence_unit">spm</string>
+    <string name="running_cadence_desc">Steps per minute. Tracks are sped up or slowed down so their beat lands under your feet, and one whose tempo is half your cadence needs no stretching at all.</string>
+    <string name="running_length">Run length</string>
+    <string name="running_length_unit">min</string>
+    <string name="running_length_desc">How long you are running for. The app takes the closest-matching tracks until that is covered, so a longer run accepts more stretching.</string>
+    <string name="running_coverage">%1$d of %2$d tracks fit this cadence</string>
+    <string name="running_plan">%1$s of music, stretched by %2$s at most</string>
+    <string name="running_coverage_none">No analysed track fits this cadence. Try moving it a few spm.</string>
+    <string name="running_suggestion">%1$d spm suits your library better: %2$d tracks instead of %3$d</string>
+    <string name="running_suggestion_apply">Use %d</string>
+    <string name="running_start">Start run</string>
+    <string name="running_stop">End run</string>
+    <string name="running_shortfall">%s short of your run. It will simply end early.</string>
+    <string name="running_now_playing">%1$.0f bpm at %2$d steps per beat, playing at %3$s</string>
+    <plurals name="running_remaining">
+        <item quantity="one">%1$s left, %2$d track</item>
+        <item quantity="other">%1$s left, %2$d tracks</item>
+    </plurals>
+    <plurals name="running_needs_analysis">
+        <item quantity="one">%d track has no tempo yet. Analyse it in Settings to bring it into your runs.</item>
+        <item quantity="other">%d tracks have no tempo yet. Analyse them in Settings to bring them into your runs.</item>
+    </plurals>
+    <string name="running_note">Speed changes at track boundaries, never inside one: switching between one and two steps per beat mid-song would double the speed under you.</string>
+
     <plurals name="delete_tracks">
         <item quantity="one">Delete track</item>
         <item quantity="other">Delete tracks</item>

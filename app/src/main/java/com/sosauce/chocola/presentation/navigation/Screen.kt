@@ -26,6 +26,10 @@ sealed class Screen : NavKey {
     @Serializable
     data object Queue : Screen()
 
+    /** RunningMusic: set up and watch a cadence-matched run. */
+    @Serializable
+    data object Running : Screen()
+
     @Serializable
     data object Lyrics : Screen()
 

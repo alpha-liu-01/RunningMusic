@@ -155,7 +155,14 @@ fun QuickActionsRow(
                     )
 
                     IconButton(
+                        // Disabled during a run, where speed is not a preference
+                        // but a property of the track being played: the run
+                        // recomputes it at the next boundary and any hand-set
+                        // value would be silently thrown away. The card behind
+                        // this also ties pitch to speed, which would transpose
+                        // the whole run.
                         onClick = onShowSpeedCard,
+                        enabled = !musicState.runningMode,
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = rateColor,
                             contentColor = contentColorFor(rateColor)

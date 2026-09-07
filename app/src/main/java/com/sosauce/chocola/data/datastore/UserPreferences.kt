@@ -15,6 +15,9 @@ import com.sosauce.chocola.data.datastore.PreferencesKeys.MIN_TRACK_DURATION
 import com.sosauce.chocola.data.datastore.PreferencesKeys.PAUSE_ON_MUTE
 import com.sosauce.chocola.data.datastore.PreferencesKeys.PLAYLIST_SORT
 import com.sosauce.chocola.data.datastore.PreferencesKeys.REGEX_FILTER
+import com.sosauce.chocola.data.datastore.PreferencesKeys.RUNNING_LENGTH_MINUTES
+import com.sosauce.chocola.data.datastore.PreferencesKeys.RUNNING_MODE_ENABLED
+import com.sosauce.chocola.data.datastore.PreferencesKeys.RUNNING_TARGET_CADENCE
 import com.sosauce.chocola.data.datastore.PreferencesKeys.SAF_TRACKS
 import com.sosauce.chocola.data.datastore.PreferencesKeys.SORT_ALBUMS_ASCENDING
 import com.sosauce.chocola.data.datastore.PreferencesKeys.SORT_ARTISTS_ASCENDING
@@ -119,6 +122,30 @@ class UserPreferences(
         it[ANALYSE_ONLY_WHILE_CHARGING] = value
     }
 
+    /**
+     * The running-mode settings, remembered between runs so a runner sets their
+     * cadence once rather than every time they leave the house.
+     */
+    fun getRunningSettings() = combine(
+        context.dataStore.data.map { it[RUNNING_TARGET_CADENCE] ?: DEFAULT_TARGET_CADENCE },
+        context.dataStore.data.map { it[RUNNING_LENGTH_MINUTES] ?: DEFAULT_RUN_LENGTH_MINUTES }
+    ) { cadence, minutes ->
+        RunningSettings(targetCadence = cadence, runLengthMinutes = minutes)
+    }
+
+    suspend fun setRunningSettings(settings: RunningSettings) = context.dataStore.edit {
+        it[RUNNING_TARGET_CADENCE] = settings.targetCadence
+        it[RUNNING_LENGTH_MINUTES] = settings.runLengthMinutes
+    }
+
+    fun getRunningModeEnabled() = context.dataStore.data.map {
+        it[RUNNING_MODE_ENABLED] ?: false
+    }
+
+    suspend fun setRunningModeEnabled(value: Boolean) = context.dataStore.edit {
+        it[RUNNING_MODE_ENABLED] = value
+    }
+
     suspend fun saveSavedMusicState(musicState: MusicState) =
         context.dataStore.edit {
             it[LAST_MUSIC_STATE] = Json.encodeToString(musicState)
@@ -181,4 +208,13 @@ data class TracksSettings(
 data class SearchSettings(
     val regex: Boolean,
     val matchCase: Boolean
+)
+
+/** A comfortable jogging cadence, and a run long enough to be worth planning. */
+const val DEFAULT_TARGET_CADENCE = 170
+const val DEFAULT_RUN_LENGTH_MINUTES = 30
+
+data class RunningSettings(
+    val targetCadence: Int,
+    val runLengthMinutes: Int
 )

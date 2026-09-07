@@ -50,6 +50,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import lol.alphaliu01.runningmusic.running.RunningModeManager
 import java.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -57,7 +58,8 @@ class MusicViewModel(
     private val application: Application,
     private val userPreferences: UserPreferences,
     private val lyricsParser: LyricsParser,
-    private val abstractTracksScanner: AbstractTracksScanner
+    private val abstractTracksScanner: AbstractTracksScanner,
+    private val runningMode: RunningModeManager
 ) : AndroidViewModel(application) {
 
     private var mediaController: MediaController? = null
@@ -279,6 +281,15 @@ class MusicViewModel(
     }
 
     init {
+        // Running mode lives in a singleton the playback service drives, so its
+        // state has to be pulled back into the UI's view of playback rather than
+        // being set from here.
+        viewModelScope.launch {
+            runningMode.state.collect { running ->
+                _musicState.update { it.copy(runningMode = running.active) }
+            }
+        }
+
         MediaController
             .Builder(
                 application,
@@ -306,12 +317,23 @@ class MusicViewModel(
         viewModelScope.launch {
 
             val savedMusicState = userPreferences.getSavedMusicState()
+            val skipSpeed = runningMode.shouldSkipSpeedRestore()
 
             mediaController?.run {
+                // Restoring anything over a queue that is already loaded would
+                // throw away live playback: the service outlives this activity,
+                // so reconnecting to a service still playing lands here with a
+                // saved snapshot that is older than what is on the speakers. A
+                // run would not survive the app being reopened.
+                if (mediaItemCount > 0) return@run
+
                 repeatMode = savedMusicState.repeatMode
                 shuffleModeEnabled = savedMusicState.shuffle
-                mediaController!!.playbackParameters =
-                    mediaController!!.playbackParameters.withSpeed(savedMusicState.speed)
+                // A speed a run derived from one track's tempo means nothing for
+                // whatever is restored next, so it is dropped rather than
+                // reapplied.
+                mediaController!!.playbackParameters = mediaController!!.playbackParameters
+                    .withSpeed(if (skipSpeed) 1f else savedMusicState.speed)
                 mediaController!!.playbackParameters =
                     mediaController!!.playbackParameters.withPitch(savedMusicState.pitch)
                 val mediaItems = savedMusicState.loadedMedias.fastMap { it.toMediaItem() }

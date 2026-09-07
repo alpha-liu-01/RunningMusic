@@ -93,3 +93,31 @@ fun fold(bpm: Double, targetCadence: Double): Fold {
         speed = targetCadence / folded,
     )
 }
+
+/**
+ * The speed [bpm] needs to reach [targetCadence] at a steps-per-beat [exponent]
+ * chosen elsewhere.
+ *
+ * [fold] re-picks the exponent every time it is called, which is exactly wrong
+ * once a track is playing: a target that drifts across a fold boundary would
+ * flip k mid-song, and applying that is a 2x speed jump. So k is decided once at
+ * the track transition and only the residual is allowed to move afterwards,
+ * which is what this computes.
+ *
+ * The result is not bounded by [MAX_RESIDUAL], because holding k fixed is the
+ * whole point. Callers are expected to clamp it with [ToleranceBand.clamp].
+ *
+ * @throws IllegalArgumentException if the tempo or cadence is not positive, or
+ * the exponent is outside [REACHABLE_EXPONENTS].
+ */
+fun foldAt(bpm: Double, targetCadence: Double, exponent: Int): Double {
+    require(bpm > 0.0 && bpm.isFinite()) { "bpm must be positive and finite, was $bpm" }
+    require(targetCadence > 0.0 && targetCadence.isFinite()) {
+        "targetCadence must be positive and finite, was $targetCadence"
+    }
+    require(exponent in REACHABLE_EXPONENTS) {
+        "exponent must be in $REACHABLE_EXPONENTS, was $exponent"
+    }
+
+    return targetCadence / (bpm * (1 shl exponent))
+}

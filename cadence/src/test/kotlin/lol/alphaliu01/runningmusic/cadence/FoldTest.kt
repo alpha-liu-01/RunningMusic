@@ -142,3 +142,55 @@ class FoldTest {
         assertFailsWith<IllegalArgumentException> { fold(120.0, Double.NaN) }
     }
 }
+
+class FoldAtTest {
+
+    @Test
+    fun `agrees with fold when given the exponent fold chose`() {
+        for (bpm in listOf(85.0, 90.0, 125.0, 170.0, 178.0)) {
+            val folded = fold(bpm, 170.0)
+            assertEquals(folded.speed, foldAt(bpm, 170.0, folded.exponent), 1e-12)
+        }
+    }
+
+    /**
+     * The reason this function exists. An 88 bpm track at 170 spm runs at two
+     * steps per beat; drifting the target up to 178 must speed it up a little,
+     * not reinterpret it as one step per beat and double it.
+     */
+    @Test
+    fun `holding the exponent keeps a drifting target from flipping the octave`() {
+        val original = fold(88.0, 170.0)
+        assertEquals(1, original.exponent)
+
+        val drifted = foldAt(88.0, 178.0, original.exponent)
+
+        assertEquals(178.0 / 176.0, drifted, 1e-12)
+        assertTrue(drifted < 1.02)
+    }
+
+    /**
+     * Held far enough from its own best exponent, the speed leaves the residual
+     * bound entirely. That is intended, and is why callers clamp.
+     */
+    @Test
+    fun `a held exponent is not bounded by the residual`() {
+        val speed = foldAt(200.0, 170.0, 1)
+
+        assertEquals(0.425, speed, 1e-12)
+        assertTrue(speed < 1.0 / MAX_RESIDUAL)
+        assertEquals(ToleranceBand.CEILING.minSpeed, ToleranceBand.CEILING.clamp(speed), 1e-12)
+    }
+
+    @Test
+    fun `rejects an exponent no runner can use`() {
+        assertFailsWith<IllegalArgumentException> { foldAt(120.0, 170.0, -1) }
+        assertFailsWith<IllegalArgumentException> { foldAt(120.0, 170.0, 2) }
+    }
+
+    @ParameterizedTest
+    @CsvSource("0, 170", "-120, 170", "120, 0", "120, -170")
+    fun `rejects non-positive input`(bpm: Double, cadence: Double) {
+        assertFailsWith<IllegalArgumentException> { foldAt(bpm, cadence, 0) }
+    }
+}
