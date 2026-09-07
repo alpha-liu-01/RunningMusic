@@ -5,6 +5,7 @@ import com.sosauce.chocola.data.AbstractTracksScanner
 import com.sosauce.chocola.data.LyricsParser
 import com.sosauce.chocola.data.datastore.UserPreferences
 import com.sosauce.chocola.data.playlist.MIGRATION_1_2
+import com.sosauce.chocola.data.playlist.MIGRATION_2_3
 import com.sosauce.chocola.data.playlist.PlaylistCleanup
 import com.sosauce.chocola.data.playlist.PlaylistDatabase
 import com.sosauce.chocola.data.repositories.FoldersRepository
@@ -33,6 +34,7 @@ import com.sosauce.chocola.presentation.screens.transformer.TransformerViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import lol.alphaliu01.runningmusic.library.TrackMetadataRepository
 import lol.alphaliu01.runningmusic.steps.StepRecorder
 import lol.alphaliu01.runningmusic.steps.StepSensors
 import lol.alphaliu01.runningmusic.steps.dev.StepRecorderViewModel
@@ -42,17 +44,22 @@ import org.koin.core.module.dsl.viewModelOf
 import org.koin.dsl.module
 
 val appModule = module {
+    // The database itself is exposed now, not just one DAO off the end of the
+    // builder, because there is more than one DAO to hand out and they have to
+    // come from the same instance.
     single {
         Room.databaseBuilder(
             context = androidApplication(),
             klass = PlaylistDatabase::class.java,
             name = "playlist.db"
         )
-            .addMigrations(MIGRATION_1_2)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
             //.addCallback(DEFAULT_PLAYLISTS_CALLBACK)
             .build()
-            .dao
     }
+
+    single { get<PlaylistDatabase>().dao }
+    single { get<PlaylistDatabase>().trackMetadataDao }
 
     single { CoroutineScope(Dispatchers.IO + SupervisorJob()) }
 
@@ -66,6 +73,7 @@ val appModule = module {
     singleOf(::WidgetsHelper)
     singleOf(::IDRepositories)
     singleOf(::PlaylistCleanup)
+    singleOf(::TrackMetadataRepository)
 
     // Debug-only step-detector spike. Registered unconditionally because the
     // dev screen that reaches it is gated on BuildConfig.DEBUG; nothing
