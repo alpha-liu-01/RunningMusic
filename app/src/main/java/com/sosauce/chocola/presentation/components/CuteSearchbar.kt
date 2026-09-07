@@ -112,6 +112,7 @@ import com.sosauce.chocola.presentation.screens.playing.NowPlaying
 import com.sosauce.chocola.presentation.screens.playing.components.PlayPauseButton
 import com.sosauce.chocola.utils.LocalScreen
 import com.sosauce.chocola.utils.SharedTransitionKeys
+import com.sosauce.chocola.utils.TrackSort
 import com.sosauce.chocola.utils.bouncySpec
 import com.sosauce.chocola.utils.rememberInteractionSource
 import com.sosauce.nekobites.animations.AnimatedDrawable
@@ -586,6 +587,26 @@ private fun Modifier.drawMusicPosition(
 }
 
 
+/**
+ * The sort fields offered for tracks, paired with their labels.
+ *
+ * Listing them explicitly rather than counting them is what keeps this menu
+ * from drifting out of step with [TrackSort], which it previously had: the
+ * menu rendered five options against a six-entry enum.
+ *
+ * [TrackSort.AS_ADDED] is deliberately absent. It is meant for playlist tracks
+ * and cannot work as advertised anyway, because a playlist stores its tracks in
+ * a Set, which keeps no order to restore.
+ */
+private val TRACK_SORT_OPTIONS = listOf(
+    TrackSort.TITLE to R.string.title,
+    TrackSort.ARTIST to R.string.artist,
+    TrackSort.ALBUM to R.string.album,
+    TrackSort.YEAR to R.string.year,
+    TrackSort.DATE_MODIFIED to R.string.date_modified,
+    TrackSort.BPM to R.string.bpm
+)
+
 object CuteSearchbarDefaults {
 
     @Composable
@@ -825,22 +846,16 @@ object CuteSearchbarDefaults {
         DropdownMenuGroup(
             shapes = MenuDefaults.groupShape(1, 2),
             content = {
-                repeat(5) { i ->
-                    val text = when (i) {
-                        0 -> R.string.title
-                        1 -> R.string.artist
-                        2 -> R.string.album
-                        3 -> R.string.year
-                        4 -> R.string.date_modified
-                        else -> throw IndexOutOfBoundsException()
-                    }
-
+                TRACK_SORT_OPTIONS.forEachIndexed { index, (sort, label) ->
                     SelectableDropdownMenuItem(
-                        selected = trackSort == i,
-                        onClick = { trackSort = i },
-                        shapes = MenuDefaults.itemShape(i, 5),
+                        // The stored value is the enum's ordinal, so it is read
+                        // and written as one rather than as this list's index.
+                        // The two differ, because not every entry is offered.
+                        selected = trackSort == sort.ordinal,
+                        onClick = { trackSort = sort.ordinal },
+                        shapes = MenuDefaults.itemShape(index, TRACK_SORT_OPTIONS.size),
                         colors = MenuDefaults.selectableItemColors(),
-                        text = { Text(stringResource(text)) }
+                        text = { Text(stringResource(label)) }
                     )
                 }
             }

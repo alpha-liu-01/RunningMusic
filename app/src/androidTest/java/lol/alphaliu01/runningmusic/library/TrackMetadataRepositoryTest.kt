@@ -42,7 +42,8 @@ class TrackMetadataRepositoryTest {
                 context = context,
                 userPreferences = userPreferences,
                 ioCoroutineScope = scope,
-                safManager = SafManager(context, userPreferences)
+                safManager = SafManager(context, userPreferences),
+                trackMetadataDao = database.trackMetadataDao
             )
         )
     }
