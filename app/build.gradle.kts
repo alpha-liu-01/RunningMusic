@@ -132,6 +132,21 @@ android {
             includeInBundle = false
         }
     }
+
+    // JUnit 5 for the host-side tests, matching :cadence. Instrumented tests
+    // stay on JUnit 4, which is what MigrationTestHelper's @Rule needs.
+    testOptions {
+        unitTests.all {
+            it.useJUnitPlatform()
+        }
+    }
+}
+
+// Room exports a JSON schema per database version here. MigrationTestHelper
+// needs the old version's schema to build a database to migrate from, so these
+// files are committed rather than generated on demand.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 val checkReleaseSigning = tasks.register("checkReleaseSigning") {
@@ -212,5 +227,10 @@ dependencies {
     implementation(libs.squircle.shape)
     implementation(libs.cloudy)
     implementation(libs.nekobites)
+
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testImplementation(libs.kotlin.test)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }
 
