@@ -19,12 +19,24 @@ androidComponents {
     }
 }
 
+// On CI, release_stable.yml decodes secrets.SIGNING_KEY into this path before
+// building. Locally it has to be put there by hand; see docs/private/RELEASE.md.
+val releaseKeystore = file("release_key.jks")
+val releaseStorePassword = providers.environmentVariable("SIGNING_STORE_PASSWORD")
+val releaseKeyAlias = providers.environmentVariable("SIGNING_KEY_ALIAS")
+val releaseKeyPassword = providers.environmentVariable("SIGNING_KEY_PASSWORD")
+val releaseKeystoreReady = releaseKeystore.exists() && releaseStorePassword.isPresent
+val allowUnsignedRelease = providers
+    .gradleProperty("runningmusic.allowUnsignedRelease")
+    .map(String::toBoolean)
+    .getOrElse(false)
+
 android {
     namespace = "com.sosauce.chocola"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.sosauce.cutemusic"
+        applicationId = "lol.alphaliu01.runningmusic"
         minSdk = 28
         targetSdk = 37
         versionCode = 50009
@@ -40,17 +52,16 @@ android {
     }
 
     signingConfigs {
+        // Only populated when the keystore is actually usable. A half-filled
+        // config makes AGP fail with "Keystore file not set for signing config
+        // release", which says nothing about what to do next; checkReleaseSigning
+        // below explains it instead.
         create("release") {
-
-            val keystoreFile = file("release_key.jks")
-
-            if (keystoreFile.exists()) {
-                storeFile = keystoreFile
-                storePassword = System.getenv("SIGNING_STORE_PASSWORD")
-                keyAlias = System.getenv("SIGNING_KEY_ALIAS")
-                keyPassword = System.getenv("SIGNING_KEY_PASSWORD")
-            } else {
-                println("No keystore found, APK will be unsigned")
+            if (releaseKeystoreReady) {
+                storeFile = releaseKeystore
+                storePassword = releaseStorePassword.get()
+                keyAlias = releaseKeyAlias.orNull
+                keyPassword = releaseKeyPassword.orNull
             }
         }
 
@@ -86,7 +97,7 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.findByName("release")
+            signingConfig = if (releaseKeystoreReady) signingConfigs.getByName("release") else null
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -118,6 +129,40 @@ android {
             includeInBundle = false
         }
     }
+}
+
+val checkReleaseSigning = tasks.register("checkReleaseSigning") {
+    description = "Fails a release build that has no usable signing configuration."
+
+    val keystorePath = releaseKeystore.absolutePath
+    val ready = releaseKeystoreReady
+    val allowUnsigned = allowUnsignedRelease
+
+    doLast {
+        if (ready || allowUnsigned) return@doLast
+
+        throw GradleException(
+            """
+            No release signing configuration, so the APK would be unsigned.
+
+            assembleRelease expects a keystore at
+              $keystorePath
+            and these environment variables:
+              SIGNING_STORE_PASSWORD, SIGNING_KEY_ALIAS, SIGNING_KEY_PASSWORD
+
+            On CI, .github/workflows/release_stable.yml decodes secrets.SIGNING_KEY
+            into that path and supplies the three variables from the other secrets.
+            To set this up locally, see docs/private/RELEASE.md.
+
+            To build an unsigned release APK anyway, for R8 or size checks:
+              ./gradlew assembleRelease -Prunningmusic.allowUnsignedRelease=true
+            """.trimIndent()
+        )
+    }
+}
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(checkReleaseSigning)
 }
 
 dependencies {

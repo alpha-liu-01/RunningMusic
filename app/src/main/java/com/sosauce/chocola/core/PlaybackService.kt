@@ -93,7 +93,7 @@ class PlaybackService : MediaLibraryService(), KoinComponent {
                 .setMediaId(ROOT_ID)
                 .setMediaMetadata(
                     MediaMetadata.Builder()
-                        .setTitle("Chocola")
+                        .setTitle(getString(R.string.app_name))
                         .setIsBrowsable(true)
                         .setIsPlayable(false)
                         .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
