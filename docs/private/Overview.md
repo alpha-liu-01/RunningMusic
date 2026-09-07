@@ -140,13 +140,13 @@ One more thing that will matter for years: you'll want to keep pulling upstream 
 
 ## Build and test setup
 
-Short version: the plan is feasible, but **roughly half of it is already done upstream, and the half you'd be hand-building in Docker is the half that's already solved.** Docker is still worth it — just for aubio and the NDK, not for Gradle.
+Short version: the plan is feasible, and **the move to Kubuntu deleted most of what this section used to be about.** Roughly half the build goal was already done upstream, and the other half — a Linux toolchain that can cross-compile C for Android — is now simply the machine you're sitting at. Build on the host, let GitHub Actions produce APKs, and don't build the Docker image.
 
 ### What already exists
 
 `.github/workflows/nightly_build.yml` is a working Ubuntu + JDK 17 job that runs `./gradlew assembleDebug` and publishes the APK to a prerelease GitHub release. That is precisely "an automated build producing a test-signed APK," already written and already working. `release_stable.yml` handles the release-signed path too, decoding a base64 keystore from `secrets.SIGNING_KEY` into `app/release_key.jks` and feeding the three signing env vars that `app/build.gradle.kts` already reads. Both are `workflow_dispatch`, so nothing fires until you ask it to.
 
-So for goal "automated build → APK," the work is renaming artifacts off `CuteMusic`, pointing the workflows at your fork, and generating your own keystore secrets. Hours, not days. Building a parallel Docker pipeline to do the same thing means maintaining two build definitions that will drift.
+The fork plumbing is done as well: `origin` is `alpha-liu-01/RunningMusic`, `upstream` is `sosauce/Chocola`, and you're currently on branch `test`. Both workflows reference only repo-relative paths, so they'll run unchanged on your fork the moment you dispatch them. What's left for "automated build → APK" is cosmetic and administrative — the release APK is still named `Chocola_${versionName}.apk`, the upload artifact is still called `CuteMusic Release`, the nightly job globs `./**/*.apk` indiscriminately, and the three signing secrets are still sosauce's. Hours, not days. Building a parallel Docker pipeline to do the same thing would mean maintaining two build definitions that will drift.
 
 Two other pleasant surprises: `.gitignore` already covers `.cxx/` and `.externalNativeBuild/`, so someone anticipated native code, and `*.jks` / `*.keystore` are already ignored, so the obvious keystore-leak footgun is pre-disarmed.
 
@@ -154,41 +154,57 @@ Two other pleasant surprises: `.gitignore` already covers `.cxx/` and `.external
 
 `testInstrumentationRunner` is declared in `defaultConfig`, but there is **no `app/src/test/`, no `app/src/androidTest/`, and not a single test dependency** in `app/build.gradle.kts`. No JUnit, no androidx.test, no Espresso. You are starting testing from zero, which is worth knowing before writing a "test setup" — there is no setup to extend.
 
-### Where Docker genuinely earns its keep
+### Docker: no longer worth building
 
-Not the Gradle build. GitHub Actions gives you a clean Ubuntu image per run, which is stronger reproducibility than a local container, for free.
+On Windows this was the load-bearing recommendation, because a container was the only convenient way to get a Linux toolchain at all. On Kubuntu that argument evaporates. The image was doing three jobs — providing Linux, isolating the NDK, and hosting a native aubio build for evaluation — and the host now does all three.
 
-What Docker *is* right for is **aubio**. Cross-compiling C for two Android ABIs is exactly the class of thing that rots between machines and NDK upgrades, and it's the one part of this project with a real native toolchain. The container also gives you something you'll want badly for testing: a **Linux host build of aubio**, so BPM accuracy can be evaluated as a fast native binary instead of round-tripping through a phone. That single capability probably justifies the whole image.
+The Gradle build was never the case for Docker anyway: GitHub Actions gives you a clean Ubuntu image per run, which is stronger reproducibility than a local container, for free.
 
-So the shape I'd recommend is a container that owns the *native* toolchain and the evaluation harness, GitHub Actions that owns APK production, and a plain WSL Gradle install for day-to-day iterative builds.
+The NDK isn't a case for it either, once you look at what it actually is. `ndk;29.x` is a self-contained Clang toolchain shipping its own sysroots; it doesn't link against the host's libc or pick up host headers. Installing it through `sdkmanager` on the host produces the same cross-compilation as installing it in an image. The "rots between machines" failure mode is really "rots between NDK versions," and you fix that by pinning `ndkVersion` in `app/build.gradle.kts`, not by maintaining an 8 GB image.
 
-### The WSL detail that matters more than Docker
+And the Linux host build of aubio — the thing that makes the BPM evaluation harness fast — is now just `gcc` on this machine, with CMake 4.2.3 and ffmpeg 8.0.1 already installed.
 
-The repo currently lives at `C:\Users\1\Documents\GitHub\RunningMusic`. If WSL or a container builds it through `/mnt/c/...`, every Gradle file stat crosses the 9P filesystem bridge and builds run several times slower — this dominates any other performance decision here. **Move the working copy onto WSL's ext4 filesystem** (`~/RunningMusic`) and open it through Cursor's WSL remote. Bind-mount that path into the container, not the Windows one.
+Two cases would still justify an image later, neither urgent: reproducing a CI failure you can't reproduce locally, and pinning the evaluation harness so an accuracy figure from six months ago stays comparable. Docker 29.4.1 is installed and your user is in the `docker` group, so that option costs nothing to keep open — it just isn't the right default any more. The shape to aim for now is the host owning day-to-day builds and the native toolchain, and GitHub Actions owning APK production.
 
-Related: don't build the same checkout from both Windows and WSL. `local.properties`, `.gradle/`, file locks, and executable permissions will fight each other. Pick one side and stay there.
+### The host: three things to fix before the first build
 
-### adb: don't fight USB passthrough
+The filesystem problem is gone. The checkout lives at `/home/alpha/Documents/GitHub/RunningMusic` on ext4 with no translation layer in the way, and there's no second operating system to accidentally build the same tree from. The machine is a Ryzen 9 7945HX with 32 threads, 62 GB of RAM and 290 GB free — comfortably more than this build needs, which matters for one setting below.
 
-Your phone is on USB to Windows, and Docker-in-WSL cannot see it without `usbipd-win` and some patience. Two better options, and you don't have to choose just one:
+Three concrete problems, all cheap, all worth clearing before anything else:
 
-Keep adb on Windows. The container writes the APK into the bind-mounted `app/build/outputs/apk/`, and a two-line PowerShell script installs it. Build and deploy are separate concerns and separating them is cleaner anyway.
+**`~/.gradle` is owned by root.** It's `drwxr-xr-x root root` and dated April, so at some point Gradle ran under `sudo` on this install. The wrapper doesn't degrade gracefully — `./gradlew --version` fails outright today with `Could not create parent directory for lock file`. A single `sudo chown -R alpha:alpha ~/.gradle` fixes it. Worth understanding rather than just fixing, because it's precisely the root-owned-artifacts failure the old container advice was warning about, arrived at without any container.
 
-Or use wireless debugging, which Android 16 has natively — `adb pair` then `adb connect` over the LAN. WSL2's NAT allows outbound LAN connections, so this works from inside WSL without any USB plumbing. For goal 4 this stops being a convenience and becomes necessary: **you cannot be tethered by USB while running.** Wireless adb plus `logcat` is how you'll actually observe a cadence control loop in the field.
+**There is no JDK 17.** The system has OpenJDK 21 and 25, and `java` resolves to 25. Both workflows use Temurin 17, and the project compiles to JVM 17 bytecode. Gradle 9.7 with AGP 9.3.2 on a JDK 25 daemon is not a combination this project has ever been built with, and when a JDK is too new for AGP the symptom is an obscure Kotlin-daemon or bytecode error rather than a clear message. `openjdk-17-jdk` is in the archive: install it and pin it via `org.gradle.java.home` in your *user-level* `~/.gradle/gradle.properties` — not the repo's, so you don't commit a machine-specific path — and local builds will then agree with CI.
+
+**There is no Android SDK.** `ANDROID_HOME` is unset, `~/Android/Sdk` doesn't exist, and there's no `local.properties`. The Debian `/usr/lib/android-sdk` is platform-tools only, at 34.0.5, and will not build anything. You need `cmdline-tools` and an `sdkmanager` install — the one part of the old Dockerfile that survives, now as a shell script.
+
+One tuning note while you're in there: `gradle.properties` sets `org.gradle.jvmargs=-Xmx1536M` with a matching 1536 MB Kotlin daemon. That's an upstream default sized for modest machines, and it's about four percent of your RAM. Raise both, and consider `org.gradle.parallel` and `org.gradle.caching`. Note that `org.gradle.configuration-cache=true` is already enabled, which is good but is also the thing most likely to complain once you add `externalNativeBuild` and a test source set — if a configuration-cache error appears right after those changes, suspect the new code rather than the machine.
+
+### adb: it just works now
+
+The USB passthrough problem doesn't exist on a native Linux host. `android-udev-rules` is installed, your user is in `plugdev`, and `~/.android/adbkey` already exists from an earlier session, so an authorised device should appear on plug-in with no further setup. Nothing is attached at the moment, so confirm it rather than assume it.
+
+The one real wrinkle is version skew. The `adb` on your `PATH` is Debian's 34.0.5 from 2023, and `sdkmanager` will install Google's current `platform-tools` alongside it. Two adb binaries at different versions will repeatedly kill each other's servers, which is a genuinely baffling five minutes the first time. Put the SDK's `platform-tools` first on `PATH` and either remove the Debian package or ignore it consistently — but decide once.
+
+Wireless debugging still matters, and for goal 4 it stops being a convenience and becomes necessary: **you cannot be tethered by USB while running.** `adb pair` then `adb connect` over the LAN, plus `logcat`, is how you'll actually observe a cadence control loop in the field. If `adb mdns check` reports discovery unavailable — Debian's adb build sometimes omits it — pair using the explicit `host:port` the phone displays instead of relying on autodiscovery.
 
 ### One dev keystore, or you will lose an afternoon
 
-Debug builds are signed with `~/.android/debug.keystore`, which is generated per-machine at random. The moment CI builds a debug APK, or you build from both WSL and Windows, the signatures differ and `adb install` fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE` — you have to uninstall and lose app data every time you switch build source. Generate **one** dedicated dev keystore, keep it outside the repo (it's gitignored anyway), and wire it into an explicit `debug` signingConfig. Do this on day one. The existing `applicationIdSuffix = ".debug"` already lets debug and release coexist on the device, which is good, and worth preserving.
+Debug builds are signed with `~/.android/debug.keystore`, which is generated per-machine at random. The moment CI builds a debug APK — or you rebuild this laptop, or add a second one — the signatures differ and `adb install` fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, so you uninstall and lose app data every time you switch build source. Generate **one** dedicated dev keystore, keep it outside the repo (it's gitignored anyway), and wire it into an explicit `debug` signingConfig. Do this on day one; conveniently, `~/.android` holds no `debug.keystore` at all right now, since nothing has ever built on this machine, so you're setting the policy on a clean slate rather than migrating off an accidental one. The existing `applicationIdSuffix = ".debug"` already lets debug and release coexist on the device, which is good, and worth preserving.
 
-### Two toolchain facts to verify before building the image
+### Three toolchain facts, now checked rather than assumed
 
-`compileSdk = 37` and `targetSdk = 37`. Confirm `platforms;android-37` is actually published in the stable SDK channel; if it's still a preview you need the preview channel in `sdkmanager`, and that changes the Dockerfile. This blocks everything, so check it first.
+The SDK question is settled: Google's stable channel currently publishes `platforms;android-37.0`, `37.1` and `37.2`, along with `build-tools;37.0.0`. No preview channel needed, and nothing here blocks. One detail that will bite when you write the install script, though — since Android 16 the platforms are minor-versioned, so **there is no bare `platforms;android-37` package**; `compileSdk = 37` wants `platforms;android-37.0`.
 
-More importantly: **Android 15+ requires native libraries to support 16 KB memory page sizes.** You're about to add native code for the first time, so this applies to you and it's easy to miss until a store rejection or a crash on a 16 KB device. Use NDK r28 or newer, where it's the default, and verify alignment on the built `.so` files rather than assuming.
+**Android 15+ requires native libraries to support 16 KB memory page sizes.** You're about to add native code for the first time, so this applies to you, and it's easy to miss until a store rejection or a crash on a 16 KB device. Use NDK r28 or newer, where it's the default — stable currently offers 28.2.x, 29.0.x and 30.0.x. Pin an exact `ndkVersion` rather than letting AGP choose, and verify alignment on the built `.so` files rather than assuming.
+
+Third, and new now that you're building on a host with its own toolchain: **pin the CMake version too.** The host has CMake 4.2.3 on `PATH`, and CMake 4 dropped compatibility with `cmake_minimum_required(VERSION < 3.5)`. Set `externalNativeBuild.cmake.version` to an SDK-provided CMake so Gradle uses that rather than whatever the host happens to have — this is also what keeps your native build and CI's native build the same build.
 
 ### Aubio specifics
 
 Don't try to cross-compile aubio with its own build system. aubio uses `waf`, and making waf target the Android NDK is a fight. aubio's sources are clean C99 with essentially no mandatory dependencies, so the tractable route is to **write your own `CMakeLists.txt` over aubio's `src/`** and hook it up through Gradle's `externalNativeBuild { cmake { } }`, which is the supported, documented path. Build with aubio's bundled ooura FFT (`HAVE_FFTW3` off) so you pull in no external library at all.
+
+Write that `CMakeLists.txt` so it configures for the host as well as for the NDK. It's the same C either way, and one source list configured twice — once with the NDK toolchain file for `arm64-v8a` and `armeabi-v7a`, once with plain `gcc` — hands you the evaluation binary described below for free, and guarantees the code you measure accuracy on is the code you ship. On Windows that dual build was the container's entire justification; here it's a second build directory.
 
 Pin a specific git commit rather than the released tarball: aubio's last release is 0.4.9 from 2019, but master is still maintained. Vendoring a pinned commit in-tree also cleanly satisfies your GPLv3 corresponding-source obligation.
 
@@ -200,7 +216,7 @@ Do use `aubio_tempo_get_confidence`. It matters more here than in most applicati
 
 You described building thoroughly and testing only as "I have a phone and adb." The phone is necessary but it's the *least* automatable layer, and the highest-value testing here is nowhere near it.
 
-**BPM accuracy is an evaluation harness, not a unit test.** There's no assertion that passes or fails; there's an accuracy figure that you want to not regress. Build it as a native binary in the container over a corpus with known tempos, and — per the Goal 3 analysis — score it **octave-agnostically**, folding the log-ratio between estimate and truth into `[0, 0.5]`. That's the only metric that reflects what your app actually needs, and it's much more forgiving than the strict accuracy figures aubio is usually judged by. Also plot correctness against aubio's confidence, so you can pick the threshold below which you refuse to guess. Don't commit audio to the repo; commit a manifest of file hashes and ground-truth BPMs pointing at a local corpus. Hand-tapping fifty tracks from your own library is a perfectly respectable start, and synthetic click tracks give you exact-truth regression fixtures for free.
+**BPM accuracy is an evaluation harness, not a unit test.** There's no assertion that passes or fails; there's an accuracy figure that you want to not regress. Build it as a native binary on the host over a corpus with known tempos, and — per the Goal 3 analysis — score it **octave-agnostically**, folding the log-ratio between estimate and truth into `[0, 0.5]`. That's the only metric that reflects what your app actually needs, and it's much more forgiving than the strict accuracy figures aubio is usually judged by. Also plot correctness against aubio's confidence, so you can pick the threshold below which you refuse to guess. Don't commit audio to the repo; commit a manifest of file hashes and ground-truth BPMs pointing at a local corpus. ffmpeg is already installed, so decoding that corpus to raw mono PCM is one command per file and the harness never needs `MediaCodec` — the same `FloatArray` boundary argument made two paragraphs down, arriving from the other direction. Hand-tapping fifty tracks from your own library is a perfectly respectable start, and synthetic click tracks give you exact-truth regression fixtures for free.
 
 **The pure Kotlin logic is where cheap tests pay off most.** Octave folding, tolerance banding, queue selection, and duration estimation from Goal 3 are all pure functions with no Android dependency. They're also exactly the code where an off-by-one silently produces music at 1.4× instead of 1.05×. A plain `src/test/` source set with JUnit covers all of it in milliseconds, and it doesn't exist yet.
 
@@ -218,21 +234,23 @@ crDroid is a custom ROM, so verify early that `TYPE_STEP_DETECTOR` exists and is
 
 Custom ROMs are also permissive about background execution. "Works on crDroid" says very little about Samsung or Xiaomi, where aggressive process killing is the norm. The foreground-service and background-sensor questions flagged in Goal 4 eventually need a stock OEM device — this is a real blind spot, not a theoretical one.
 
-And your device is Android 16 (API 36) while the app targets API 37, so the behaviour changes you opt into by targeting 37 are exactly the ones you can't observe. `minSdk = 28` is likewise never exercised. Two emulator images, one at API 28 and one at API 37, close both gaps cheaply and are worth having in the loop even though the real work happens on hardware.
+And your device is Android 16 (API 36) while the app targets API 37, so the behaviour changes you opt into by targeting 37 are exactly the ones you can't observe. `minSdk = 28` is likewise never exercised. Two emulator images, one at API 28 and one at API 37, close both gaps, and on this machine they're genuinely cheap: `/dev/kvm` exists, the CPU reports AMD-V, and an ACL already grants your user read-write access, so hardware acceleration works without even adding yourself to the `kvm` group. Budget a little patience for the emulator's graphics path instead — KDE on Wayland with an NVIDIA card is the configuration most likely to need a `-gpu` fallback.
 
-### Practical container notes, for when we build it
+### Practical host setup notes, for when we do it
 
-Base on `eclipse-temurin:17-jdk` to match the project's JVM 17 target and the JDK the existing workflows use. Install `cmdline-tools`, accept licenses, then `platform-tools`, `platforms;android-37`, `build-tools;37.0.0`, `ndk;28.x`, `cmake`.
+Install `cmdline-tools` into `~/Android/Sdk`, accept the licenses, then `sdkmanager` the rest: `platform-tools`, `platforms;android-37.0`, `build-tools;37.0.0`, an `ndk;29.x`, and a `cmake`. Write it as a checked-in shell script rather than commands you run once — see the GPL note below, and because CI will eventually want the identical list.
 
-Persist `~/.gradle` and `~/.android` as named volumes, or every build re-downloads hundreds of megabytes. Run as a non-root user whose UID matches your WSL user, or the bind mount fills with root-owned build output — the classic Docker-on-WSL annoyance. Prefer a long-lived container you `docker exec` into over one-shot `docker run`, so the Gradle and Kotlin compile daemons stay warm; one-shot runs are for CI, not iteration. Expect roughly 8 GB of image once the NDK is in. Finally, give WSL enough memory in `.wslconfig`: Gradle plus the Kotlin daemon plus a C compile will get OOM-killed under a tight cap, and the resulting errors are misleading.
+Expect roughly 8 GB on disk once the NDK is in; with 290 GB free, the constraint that mattered on Windows doesn't apply, and neither does the `.wslconfig` memory cap that used to get the Kotlin daemon OOM-killed. `local.properties` is gitignored and will be generated with the SDK path, which is correct and should stay uncommitted.
+
+The one piece of container advice that carries over, inverted: keeping the Gradle and Kotlin daemons warm was the reason to prefer a long-lived container over one-shot `docker run`. On the host you get that for free — just don't habitually pass `--no-daemon`, and never run Gradle under `sudo`, which is how `~/.gradle` came to be root-owned in the first place.
 
 ### A GPL note
 
-GPLv3's "Corresponding Source" includes the scripts used to control compilation and installation. A documented, scripted, reproducible build isn't just good practice for this project — it's part of what you're obliged to distribute. Worth keeping the build definition in-repo and readable rather than encoding tribal knowledge in a local container you never publish.
+GPLv3's "Corresponding Source" includes the scripts used to control compilation and installation. A documented, scripted, reproducible build isn't just good practice for this project — it's part of what you're obliged to distribute. Worth keeping the build definition in-repo and readable rather than leaving it as tribal knowledge in one laptop's shell history. It's also the tidiest argument for writing that SDK bootstrap as a checked-in script.
 
 ## Suggested order
 
-Step zero, before any of the features: move the checkout into WSL, confirm `platforms;android-37` is really available, point the existing workflows at your fork, and create the dev keystore. Cheap, and everything downstream is slower or more annoying without it.
+Step zero, before any of the features, is shorter than it was. Fix the root-owned `~/.gradle`, install JDK 17 and pin it, install the SDK, and get `./gradlew assembleDebug` to succeed once on this machine — that single green build retires most of the uncertainty in the section above. Then create the dev keystore and do the artifact renames in the two workflows. The `platforms;android-37` question is already answered and the fork remotes are already configured, so both drop off the list entirely.
 
 Then I'd sequence it to de-risk early: the fork housekeeping and rebrand; then the persistence layer with the stable-key decision and a manually-entered BPM field, which lets you build and validate goal 2's sorting end-to-end with zero DSP; then the aubio toolchain and analyser behind that same interface; then the folding-and-tolerance matcher with a manual cadence slider and a fixed queue; and only last the step counter, which is what forces the dynamic queue and the control loop. That way each stage is independently useful, and the step counter — the piece most likely to fight the platform — lands on top of something already working rather than blocking it.
 
