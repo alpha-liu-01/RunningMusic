@@ -24,7 +24,9 @@ Whichever engine is in play, **put it behind an interface that takes `FloatArray
 
 Also read the file's existing `TBPM`/`BPM` tag via taglib first and skip analysis when it's present — free and instant for tracks that already carry it. Note that if you later want to *write* BPM back to files, the current save path in `Extensions.kt` rebuilds a fixed property map from a whitelist, so it silently drops unknown tags. Writing BPM means merging into the existing `propertyMap` instead — which is arguably an upstream bug fix worth contributing back.
 
-**The key design decision: what to key the cache on.** Your instinct will be `mediaId`, but that's `MediaStore._ID`, which is not stable — it changes when the media store is rebuilt or files move, and SAF tracks use `uri.hashCode()`. The existence of `PlaylistCleanup.kt`, which purges stale mediaIds from playlists, is proof this happens in the wild. Losing an entire library's analysis to a rescan would be brutal. Key on something durable instead: path plus file size plus duration, or a hash of the first chunk of file bytes. Get this right on day one; migrating it later means re-analysing everyone's library.
+**The key design decision: what to key the cache on.** Your instinct will be `mediaId`, but that's `MediaStore._ID`, which is not stable — it changes when the media store is rebuilt or files move, and SAF tracks use `uri.hashCode()`. The existence of `PlaylistCleanup.kt`, which purges stale mediaIds from playlists, is proof this happens in the wild. Losing an entire library's analysis to a rescan would be brutal.
+
+`PlaylistCleanup` is worse than it first looks, and it's worth reading before you design the key. It queries MediaStore for every `_ID`, then deletes any playlist entry not in that set — but SAF tracks are keyed by `uri.hashCode()` and are *never* in a MediaStore result. So every SAF track silently disappears from every playlist on the next cleanup pass. That's an upstream bug you'll want to fix rather than replicate, and it's a concrete demonstration of why one opaque id space shared by two very different sources is the wrong foundation to build BPM storage on. Key on something durable instead: path plus file size plus duration, or a hash of the first chunk of file bytes. Get this right on day one; migrating it later means re-analysing everyone's library.
 
 **Running it at scale.** For a 2000-track library you need a proper background job with progress UI, cancellation, and charging/idle awareness. WorkManager isn't a dependency yet, so that's one addition. Room is at version 2 with an existing `MIGRATION_1_2` you can copy the pattern from.
 
@@ -34,7 +36,7 @@ Easy, with two small traps.
 
 Library sorting currently happens in SQL — `tracksSettingsToMediaStore()` builds an `ORDER BY` clause for the `ContentResolver.query()`. BPM lives in your database, not MediaStore, so BPM sort has to be an in-memory pass after the query. Fine, and the album/artist/playlist screens already sort in memory via `ordered()` extensions, so there's precedent.
 
-The trap is that `TrackSort` is persisted as an **integer index** into `enum.entries`. Append `BPM` at the end; inserting it mid-enum silently rewrites every existing user's saved sort preference. Related: `AS_ADDED` already sits at index 5 but `TrackSortPopupContent()` only renders `repeat(5)` options, so there's a latent off-by-one in that popup you'll be editing. Decide too where un-analysed tracks sort — nulls last is the sane default.
+The trap is that `TrackSort` is persisted as an **integer index** into `enum.entries`. Append `BPM` at the end; inserting it mid-enum silently rewrites every existing user's saved sort preference. Related: `AS_ADDED` already sits at index 5 but `TrackSortPopupContent()` only renders `repeat(5)` options, so there's a latent off-by-one in that popup you'll be editing. It's not only a UI gap — `tracksSettingsToMediaStore()` maps `AS_ADDED` to an empty column name and then concatenates, producing the ORDER BY string `" COLLATE NOCASE ASC"`. Anyone who reaches that state gets meaningless ordering. Since you're appending a seventh entry to this exact enum and adding a second, in-memory sort path beside the SQL one, fixing `AS_ADDED` costs almost nothing while you're there. Decide too where un-analysed tracks sort — nulls last is the sane default.
 
 ## Goal 3: speed matched to a target BPM
 
@@ -93,6 +95,8 @@ The gap at `√2` can only be filled by non-power-of-two factors. Three steps pe
 ### Set the tolerance from run length, not the other way round
 
 Your observation that a bigger library allows a tighter range generalises nicely, and inverting it makes for better UX. Rather than having the user pick `r` and discover how many tracks survive, have them state how long they're running. Rank every analysed track by absolute log-deviation, take tracks until the duration is filled, and `r` falls out as the worst deviation you had to include. That's self-tuning, guarantees the run is covered, and minimises average distortion instead of just bounding it. It also gives you an honest thing to display: "45 minutes, 68 tracks, at most ±7% stretch."
+
+One prerequisite that isn't obvious until you try to write it: **`CuteTrack` has no duration field.** The scanner projects only `_ID`, `TITLE`, `ARTIST`, `ALBUM`, `DATA` and `TRACK`; duration appears solely in the `WHERE` clause as a minimum-length filter, and `MusicState.duration` comes from the player and so only exists for the track currently loaded. Filling a run of known length requires per-track duration for the whole library, so `MediaStore.Audio.Media.DURATION` has to join the projection and the model. Cheap, but it belongs in the persistence work rather than being discovered halfway through the queue builder — and note that the duration you need for planning is the *stretched* duration, `duration / speed`, which is the same correction `CuteSlider` already applies.
 
 Two caveats. Keep a hard musical ceiling on `r` (somewhere around 1.15) so a thin library degrades by admitting a shorter queue rather than by producing unlistenable audio. And don't order the queue strictly by deviation, or every run starts with the same songs — filter by deviation, then shuffle within, optionally weighted toward smaller deviation.
 
@@ -257,3 +261,368 @@ Then I'd sequence it to de-risk early: the fork housekeeping and rebrand; then t
 Two things to slot in earlier than instinct suggests, because retrofitting them is disproportionately painful: the JVM test source set (it doesn't exist, and the folding maths is the highest-value thing to test in the whole project), and the step-timestamp recorder, so that your first real run outdoors becomes a permanent test fixture.
 
 The folding maths is cheap to write and worth prototyping off-device first: run it over a CSV of BPMs to see what tolerance your actual library supports at your actual cadence before committing to any UI. The remaining decision that's expensive to change later is the stable cache key from Goal 1.
+
+## The remaining work, as ten plans
+
+Step zero is done, so what follows is everything else, split into units that each survive a single planning session and land as one or two reviewable commits. The split is chosen so that every plan leaves the app in a working state and most leave it more useful than before — no plan is a six-hour stretch of broken build waiting for the next one to redeem it.
+
+Each block below is meant to be pasted into a new plan as-is. They deliberately don't restate the reasoning; they point back at the sections above, because a plan that re-derives the argument from scratch tends to re-derive it slightly differently.
+
+```mermaid
+graph TD
+    P1["1. Fork housekeeping and signing"]
+    P2["2. Test source set and matching maths"]
+    P3["3. Sensor spike and step recorder"]
+    P4["4. Track metadata store"]
+    P5["5. Sort by BPM"]
+    P6["6. aubio toolchain"]
+    P7["7. Evaluation harness"]
+    P8["8. Decode and analysis pipeline"]
+    P9["9. Running mode playback"]
+    P10["10. Cadence control loop"]
+
+    P1 --> P4
+    P4 --> P5
+    P4 --> P8
+    P6 --> P7
+    P7 --> P8
+    P2 --> P9
+    P5 --> P9
+    P8 --> P9
+    P3 --> P10
+    P9 --> P10
+```
+
+The first three have no dependencies on each other and can go in any order, or in parallel if you ever want to run plans concurrently. Plan 6 likewise doesn't depend on anything but step zero, so it's the natural thing to pick up whenever the Android-side work is blocked on a decision.
+
+### 1. Fork housekeeping, rebrand and release signing
+
+Goal 5 in full, plus the release signing that step zero deliberately deferred. All chores, no feature risk, and doing it first means every artifact from here on is named correctly at birth rather than renamed later. The one thing to think about rather than type is how much of the `com.sosauce.chocola` namespace to disturb.
+
+```text
+Read docs/private/Overview.md, section "Goal 5: license and fork housekeeping".
+
+Rebrand this fork from Chocola to RunningMusic and finish the release signing
+setup.
+
+- Change applicationId from com.sosauce.cutemusic to a new id you propose. It
+  must differ from upstream's so both apps can be installed side by side and
+  so this fork can be distributed independently. Keep the .debug suffix.
+- Decide whether to also rename the com.sosauce.chocola namespace and package
+  directories. Argue the tradeoff against future upstream rebases explicitly
+  before doing it, and tell me your recommendation rather than assuming.
+- Replace the app name strings, launcher icon, mascot artwork and
+  rootProject.name. GPLv3 licenses the code, not the branding, so the Chocola
+  name and artwork are not ours to ship. The code and LICENSE stay.
+- Add the GPLv3 section 5(a) modification notices and my copyright alongside
+  sosauce's. Do not remove theirs. Leave font_licence.txt untouched.
+- Update GET_STARTED.md and README.md, which still point contributors at
+  sosauce/CuteMusic.
+- Generate a release keystore, document the four GitHub secrets that
+  release_stable.yml expects (SIGNING_KEY, KEY_ALIAS, KEY_PASSWORD,
+  KEYSTORE_PASSWORD), and make a local assembleRelease without a keystore fail
+  with a clear explanation instead of "Keystore file not set for signing
+  config release".
+
+Do not touch playback, data or UI logic.
+```
+
+My own inclination on the namespace question: change `applicationId` and the branding, leave the `com.sosauce.chocola` package alone. A package rename touches all 135 source files and turns every future upstream merge into a wall of conflicts, in exchange for cosmetics nobody but you will ever see.
+
+### 2. The JVM test source set and the cadence-matching maths
+
+The highest value per line in the project, and the cheapest thing to get wrong silently. This is pure Kotlin with no Android dependency, so it runs in milliseconds and needs no device. It also creates `app/src/test/`, which does not exist today.
+
+```text
+Read docs/private/Overview.md, section "Goal 3", especially "Octave folding,
+and why it fixes the original objection", "In practice it's a binary choice,
+not an infinite grid", and "Set the tolerance from run length".
+
+Create the project's first JVM test source set and implement the cadence
+matching maths as pure functions with no Android dependencies.
+
+- Add app/src/test/ and the test dependencies. There are currently none at all:
+  no JUnit, no androidx.test. Pick JUnit4 or JUnit5 and justify the choice.
+- Implement, in a new package that upstream does not touch:
+  - octave folding: given a track BPM and a target cadence, return the
+    steps-per-beat exponent k clamped explicitly to {0, 1} and the residual
+    playback speed
+  - the acceptance band for a tolerance ratio r
+  - queue selection: given (bpm, durationMs) pairs, a target cadence and a
+    target run length, return the chosen tracks and the worst deviation that
+    had to be admitted, subject to a hard ceiling on r
+- Fill the run using stretched duration (duration / speed), not raw duration.
+- Test the cases that actually bite: the 120-130 BPM cluster at a 170 SPM
+  target, r = sqrt(2) accepting the entire library, a BPM exactly midway
+  between two octaves, an empty library, a library too thin to fill the run,
+  and confirmation that the residual never escapes [2^-0.5, 2^0.5].
+- Add a small CLI entry point that reads a CSV of BPMs, so I can measure what
+  tolerance my real library supports at my real cadence before any UI exists.
+
+No Android APIs, no ViewModel, no Compose. It must all run under ./gradlew test.
+```
+
+Two things worth settling here rather than later: whether the acceptance band is symmetric (the hypothesis above is that +12%/-8% beats ±10%, but it is only a hypothesis), and whether the hard ceiling on `r` is a constant or a user setting.
+
+### 3. Sensor spike and the step-timestamp recorder
+
+Deliberately early and deliberately small. Goal 4 carries the most platform risk in the project, and almost all of that risk is answerable in an afternoon by a spike that touches nothing else. The recorder is here rather than in plan 10 because every outdoor run you take before it exists is a fixture you didn't capture.
+
+```text
+Read docs/private/Overview.md, "Goal 4: step counter driving the target", and
+the paragraph "Design the cadence loop to be testable" in the testing section.
+
+Build a minimal step sensor spike and a step-timestamp recorder. Explicitly do
+NOT build the control loop, and do not connect anything to playback.
+
+- Handle ACTIVITY_RECOGNITION on both paths: it is a runtime permission from
+  API 29, and minSdk is 28, so the pre-29 path must work without it. The
+  manifest currently declares no sensor permissions and there is no sensor code
+  anywhere in the repo.
+- Register Sensor.TYPE_STEP_DETECTOR, not TYPE_STEP_COUNTER. Verify on my
+  device whether it is hardware-backed and report what
+  `adb shell dumpsys sensorservice` says. This is crDroid, a custom ROM, so a
+  software-backed detector is a real possibility and would change the latency
+  and battery baseline we tune against.
+- Determine empirically whether step events keep arriving while the screen is
+  off and the app is backgrounded, given PlaybackService is currently
+  foregroundServiceType="mediaPlayback". If the health FGS type and its
+  permissions are required, add them and explain what forced it.
+- Add a debug-only recorder that appends raw step timestamps to a file, and a
+  documented way to pull that file off the device.
+- Add a developer screen showing live step events and instantaneous cadence.
+
+The deliverables are a recorder I can take on a real run and a written answer
+to the background sensor question.
+```
+
+### 4. The track metadata store
+
+The spine of the whole project, and the plan containing the one decision that is genuinely expensive to reverse. It ends with a manually-entered BPM field, which means the entire storage path can be exercised and validated before any DSP exists.
+
+```text
+Read docs/private/Overview.md, "Goal 1: BPM analysis", especially "The key
+design decision: what to key the cache on" and the PlaylistCleanup paragraph
+that follows it.
+
+Introduce the app's first per-track metadata store.
+
+- Add a Room entity for track metadata keyed on something durable. mediaId is
+  not durable: it is MediaStore._ID for scanned tracks and uri.hashCode() for
+  SAF tracks, and it changes when the media store is rebuilt or files move.
+  Propose a key (path plus file size plus duration, or a hash of the first
+  chunk of bytes), justify it, and keep callers working in mediaId by
+  resolving mediaId -> durable key -> row internally.
+- Bump PlaylistDatabase from version 2 to 3 with a MIGRATION_2_3 following the
+  existing MIGRATION_1_2 pattern, register it in the Koin module in
+  di/AppModule.kt (which currently exposes only the DAO, not the database),
+  and add room-testing with MigrationTestHelper coverage.
+- Add MediaStore.Audio.Media.DURATION to the projection in
+  AbstractTracksScanner and a duration field to CuteTrack. Neither exists
+  today; duration is currently only used in the WHERE clause.
+- Store a nullable BPM, a confidence value, and an analysedAt timestamp.
+  Nullable BPM means "never analysed", which must stay distinguishable from
+  "analysed and not confident enough to use".
+- Add a manual BPM entry field to the track details UI, so the store can be
+  exercised end to end with no DSP at all.
+- Fix PlaylistCleanup, which purges any playlist entry whose id is absent from
+  MediaStore and therefore silently deletes every SAF track from every
+  playlist.
+
+No decoding, no DSP, no analysis job. Manual entry only.
+```
+
+### 5. Sort by BPM
+
+Small, self-contained, and immediately useful once plan 4 lands, since manually entered BPMs give it something to sort. Mostly a matter of not tripping the two traps already documented.
+
+```text
+Read docs/private/Overview.md, "Goal 2: sort by BPM".
+
+Add BPM as a track sort option.
+
+- Append BPM to the end of the TrackSort enum in utils/Enums.kt. It is
+  persisted as an integer index into enum.entries, so inserting it anywhere
+  but the end silently rewrites every existing user's saved sort preference.
+- BPM lives in Room, not MediaStore, so tracksSettingsToMediaStore() cannot
+  express it. Add an in-memory pass after the ContentResolver query, following
+  the precedent set by the ordered() extensions in utils/Extensions.kt.
+- Sort un-analysed tracks last, in both ascending and descending order.
+- While you are in there, fix two existing bugs in the code you are editing:
+  TrackSortPopupContent() in CuteSearchbar.kt hardcodes repeat(5) against what
+  will now be a seven-entry enum, and AS_ADDED maps to an empty column name so
+  tracksSettingsToMediaStore() emits the ORDER BY string " COLLATE NOCASE ASC".
+- Add tests for the comparator, including the nulls-last behaviour.
+```
+
+### 6. The aubio toolchain
+
+The one plan with a real native toolchain, and the only one where a mistake shows up as a crash on someone else's phone rather than a failed build. It ends at a tested native library and does not touch the app.
+
+```text
+Read docs/private/Overview.md, "Aubio specifics" and "Three toolchain facts,
+now checked rather than assumed".
+
+Vendor aubio and wire up the NDK build. scripts/setup-android-sdk.sh has
+already installed ndk;29.0.14206865 and cmake;3.31.6.
+
+- Vendor aubio at a pinned git commit rather than the 0.4.9 tarball from 2019.
+  Record the commit; vendoring in-tree also satisfies the GPLv3 corresponding
+  source obligation.
+- Do not try to make aubio's own waf build target the NDK. Write our own
+  CMakeLists.txt over aubio's src/, using the bundled ooura FFT with
+  HAVE_FFTW3 off so there are no external dependencies at all.
+- Make that one CMakeLists configure for two toolchains: the NDK for
+  arm64-v8a and armeabi-v7a through Gradle's externalNativeBuild, and the host
+  through plain gcc for the evaluation harness in the next plan.
+- Pin ndkVersion and externalNativeBuild.cmake.version explicitly. The host has
+  CMake 4.2.3 on PATH and must not be the one used. Note that AGP 9's own
+  default NDK is r28c (28.2.13676358); if 29 causes trouble, that is the
+  version to fall back to.
+- Verify the built .so files are 16 KB page aligned rather than assuming it.
+  Android 15+ requires it and this is the project's first native code.
+- Keep the JNI surface tiny: a handle holding an aubio_tempo_t*, one function
+  that feeds a hop of mono float PCM, and getters for BPM and
+  aubio_tempo_get_confidence.
+- For a whole-file estimate, collect beat times and take the median
+  inter-beat interval rather than trusting the running aubio_tempo_get_bpm.
+- Add a host smoke test proving the library recovers the tempo of a synthetic
+  click track.
+
+Do not integrate with the app's playback or data layers.
+```
+
+### 7. The BPM evaluation harness
+
+Not a test suite, and worth keeping mentally separate from one: there is no assertion that passes, only a number that should not get worse. It runs entirely on the host, which is why it's fast enough to be worth having.
+
+```text
+Read docs/private/Overview.md, "Testing: the part your plan doesn't cover yet",
+and "This makes Goal 1 easier" in the Goal 3 section.
+
+Build the BPM accuracy harness as a host binary on top of the host build from
+the aubio plan. ffmpeg is already installed and decodes the corpus.
+
+- Score octave-agnostically: fold log2(estimate / truth) into [0, 0.5]. Strict
+  accuracy is the wrong metric for this app, because an octave error produces
+  an identical playback speed once folding is applied.
+- Do not commit audio to the repository. Commit a manifest of file hashes and
+  ground-truth BPMs pointing at a local corpus, plus synthetic click tracks as
+  exact-truth regression fixtures.
+- Report correctness against aubio's confidence value, so I can pick the
+  threshold below which the app should refuse to guess. This matters more here
+  than in most applications: a wrong BPM does not produce a slightly-off
+  playlist, it produces a track played at a wildly wrong speed.
+- Make it re-runnable and its output comparable across runs.
+
+Deliverables are the accuracy figure, the recommended confidence threshold, and
+a documented way to re-run it.
+```
+
+### 8. Decode and analysis pipeline
+
+Where the native work meets the data layer. The interface boundary specified here is the one that keeps the DSP host-testable and the engine swappable, so it's worth insisting on even where it feels like ceremony.
+
+```text
+Read docs/private/Overview.md, "Goal 1: BPM analysis" and its subsection
+"Running it at scale".
+
+Connect decoding and aubio to the metadata store.
+
+- Decode offline with MediaExtractor and MediaCodec. Do not analyse during
+  playback by inserting an AudioProcessor: a track's BPM would then only be
+  known after it had already been played, which is useless for sorting.
+  Downmix to mono, resample to roughly 22 kHz, and analyse 60 to 90 seconds
+  from the middle of the track rather than all of it.
+- Draw the boundary at FloatArray PCM: the analyser takes FloatArray and
+  returns BPM plus confidence, behind an interface, so the decoder is
+  independently instrumentable and the DSP stays host-testable and swappable.
+- Read the file's existing TBPM/BPM tag via taglib first and skip analysis when
+  it is present. Note that Extensions.kt rebuilds propertyMap from a fixed
+  whitelist and so silently drops unknown tags; decide whether to write BPM
+  back to files at all, and if so merge into the existing map rather than
+  replacing it.
+- Add WorkManager, which is not currently a dependency, for a library-wide
+  analysis job with progress UI, cancellation, and charging/idle constraints. A
+  2000-track library needs this to be a real background job. Do not copy the
+  PlaylistCleanup pattern of an unbounded flow collector launched from
+  MainActivity's lifecycleScope.
+- Below the confidence threshold from the harness, record the track as BPM
+  unknown and exclude it. Never guess.
+- Cover the decode layer with instrumented tests; Robolectric will not
+  meaningfully fake MediaCodec.
+```
+
+### 9. Running mode: cadence-matched playback
+
+The first plan where the app does the thing it exists to do. It uses a manual cadence slider so the whole feature can be validated before any sensor is involved, which keeps the two hard problems apart.
+
+```text
+Read docs/private/Overview.md, "Goal 3: speed matched to a target BPM" in full,
+paying particular attention to "Implementation gotchas".
+
+Build running mode, driven by a manual cadence slider. No sensor input yet.
+
+- Move the BPM-to-speed logic into PlaybackService or a Koin-injected domain
+  object. It must not live in MusicViewModel: on a real run the screen is off
+  and the activity is very likely destroyed while PlaybackService keeps
+  playing, at which point track transitions stop triggering the recompute and
+  the speed freezes. PlaybackService.listener does not implement
+  onMediaItemTransition today; only MusicViewModel's listener does.
+- Use the pure functions from the maths plan. Do not reimplement folding.
+- Force the pitch-follows-speed "snap" toggle off in running mode. Media3
+  already preserves pitch when changing speed, via Sonic.
+- Replace the fixed queue. PlayerActions.StartPlaylist currently calls
+  setMediaItems with the entire list at once; a drifting target needs a short
+  lookahead window revised as it moves, via replaceMediaItems and
+  addMediaItems.
+- Persist target cadence, tolerance, and a mode flag distinguishing manual
+  speed from cadence-locked. MusicState.speed becomes meaningless per track,
+  and note that the whole MusicState is serialised to DataStore in onCleared().
+- Ramp speed changes rather than stepping them, to avoid clicks at track
+  boundaries.
+- Re-evaluate the steps-per-beat exponent k only at track transitions. Mid
+  track, allow only the residual to move, clamped and ramped: a mid-song k flip
+  is a 2x speed jump.
+- Make the DYNAMIC_DURATION correction the default in running mode, and apply
+  the same division by speed everywhere a track or playlist duration is shown.
+- Implement the cadence suggestion from "The 120-130 BPM trap": compute the
+  folded-BPM histogram of my library and propose a target within a few SPM of
+  my measured cadence that the library actually supports.
+```
+
+### 10. Closing the loop: the step counter drives the target
+
+Last because it's the piece most likely to fight the platform, and by this point it lands on top of something that already works rather than blocking everything behind it. The control-loop-as-pure-function constraint is the single most important line in this prompt.
+
+```text
+Read docs/private/Overview.md, "Goal 4: step counter driving the target", and
+the control loop paragraph in the testing section.
+
+Drive running mode's target cadence from the step detector, reusing the
+recorder and the platform answers from the sensor spike plan.
+
+- Implement the control loop as a pure function over a stream of step
+  timestamps, so recorded runs replay as fixtures. Do not wire sensor callbacks
+  directly into playback; that produces a system testable only by exercising.
+- Derive cadence from inter-event intervals of TYPE_STEP_DETECTOR. Do not use
+  TYPE_STEP_COUNTER, which is cumulative and laggy, and do not poll the raw
+  accelerometer, which is a battery sink.
+- Smooth aggressively: a 30 to 60 second median rather than an instantaneous
+  reading, a deadband so small fluctuations do nothing, and a rate limit on how
+  fast the target may move. Naive feedback runs away, because faster music
+  makes a faster runner which makes faster music.
+- Detect stopping and walking and hold the last target, rather than collapsing
+  to 0.6x at a traffic light.
+- Default to measure-then-lock: sample natural cadence for the first minute,
+  set the target, hold it. Continuous tracking is opt-in.
+- Unit-test runaway feedback, traffic lights, walking breaks and a dropped
+  sensor against the recorded fixtures, without leaving the chair.
+- Then take it for a real run, and report what the fixtures failed to predict.
+```
+
+### What none of these plans cover
+
+Three things are deliberately unowned, because they're judgement rather than work. Playback feel and audio artefacts across the range of stretch ratios can only be assessed by listening. Battery drain over a real hour-long run has no automated proxy. And the OEM background-execution question — whether any of this survives on a Samsung or Xiaomi, where aggressive process killing is normal — needs hardware nobody in this project owns yet. Worth revisiting after plan 10, when there is finally something whose battery cost is worth measuring.
+
+The emulator images from the toolchain notes are also unowned on purpose. They close the `minSdk = 28` and `targetSdk = 37` coverage gaps cheaply, but no single plan needs them, so they're best added to whichever plan first breaks on an API level difference.
