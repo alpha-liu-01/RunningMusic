@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Everything the step-detector spike needs.
+
+    It lives in the debug source set rather than in main so that no part of it,
+    permission or service, can reach a release APK. The Kotlin itself is in main
+    and gated on BuildConfig.DEBUG; keeping the manifest entries here is what
+    makes that gating enforceable rather than a promise.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Runtime permission since API 29; below that the step detector is free. -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <!-- So the recorder service can be A/B tested against the mediaPlayback type. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
+    <!-- Without this the foreground notification is silently invisible on API 33+. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <uses-feature
+        android:name="android.hardware.sensor.stepdetector"
+        android:required="false" />
+
+    <application>
+        <!--
+            Both FGS types are declared so the service can choose one at
+            startForeground() time from an intent extra, which is what lets the
+            experiment matrix run without a rebuild between configurations.
+
+            Exported so `adb shell am start-foreground-service` can drive it. The
+            experiment is four timed runs that have to start and stop at known
+            instants, and tapping through a UI mid-run adds exactly the kind of
+            noise the measurement cannot absorb. This whole file is in the debug
+            source set, so the exported service cannot exist in a release APK.
+        -->
+        <service
+            android:name="lol.alphaliu01.runningmusic.steps.StepRecorderService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback|health" />
+    </application>
+
+</manifest>

@@ -33,6 +33,9 @@ import com.sosauce.chocola.presentation.screens.transformer.TransformerViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import lol.alphaliu01.runningmusic.steps.StepRecorder
+import lol.alphaliu01.runningmusic.steps.StepSensors
+import lol.alphaliu01.runningmusic.steps.dev.StepRecorderViewModel
 import org.koin.android.ext.koin.androidApplication
 import org.koin.core.module.dsl.singleOf
 import org.koin.core.module.dsl.viewModelOf
@@ -64,6 +67,11 @@ val appModule = module {
     singleOf(::IDRepositories)
     singleOf(::PlaylistCleanup)
 
+    // Debug-only step-detector spike. Registered unconditionally because the
+    // dev screen that reaches it is gated on BuildConfig.DEBUG; nothing
+    // constructs these in a release build.
+    singleOf(::StepSensors)
+    singleOf(::StepRecorder)
 
 
     viewModelOf(::MusicViewModel)
@@ -83,4 +91,5 @@ val appModule = module {
     viewModelOf(::LyricsEditorViewModel)
     viewModelOf(::SettingsLibraryViewModel)
     viewModelOf(::TracksDetailsDialogViewModel)
+    viewModelOf(::StepRecorderViewModel)
 }

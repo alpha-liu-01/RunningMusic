@@ -118,6 +118,9 @@ android {
         }
         buildFeatures {
             compose = true
+            // Debug-only code lives in src/main but is gated on BuildConfig.DEBUG,
+            // so the constant has to be generated.
+            buildConfig = true
         }
         packaging {
             resources {
@@ -166,6 +169,7 @@ tasks.matching { it.name == "preReleaseBuild" }.configureEach {
 }
 
 dependencies {
+    implementation(project(":cadence"))
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
