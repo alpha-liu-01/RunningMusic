@@ -4,8 +4,7 @@ import androidx.room.Room
 import com.sosauce.chocola.data.AbstractTracksScanner
 import com.sosauce.chocola.data.LyricsParser
 import com.sosauce.chocola.data.datastore.UserPreferences
-import com.sosauce.chocola.data.playlist.MIGRATION_1_2
-import com.sosauce.chocola.data.playlist.MIGRATION_2_3
+import com.sosauce.chocola.data.playlist.PLAYLIST_DATABASE_MIGRATIONS
 import com.sosauce.chocola.data.playlist.PlaylistCleanup
 import com.sosauce.chocola.data.playlist.PlaylistDatabase
 import com.sosauce.chocola.data.repositories.FoldersRepository
@@ -53,7 +52,7 @@ val appModule = module {
             klass = PlaylistDatabase::class.java,
             name = "playlist.db"
         )
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            .addMigrations(*PLAYLIST_DATABASE_MIGRATIONS)
             //.addCallback(DEFAULT_PLAYLISTS_CALLBACK)
             .build()
     }

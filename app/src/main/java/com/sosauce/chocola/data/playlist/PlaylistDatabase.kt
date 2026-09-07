@@ -58,3 +58,13 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
         )
     }
 }
+
+/**
+ * Every migration the app knows about, so the database is opened the same way
+ * everywhere and a test can check the set still reaches the current version. A
+ * migration that is written but never registered looks fine right up until
+ * someone upgrades, and then the app cannot start at all.
+ *
+ * Declared last because top-level properties initialise in file order.
+ */
+val PLAYLIST_DATABASE_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3)

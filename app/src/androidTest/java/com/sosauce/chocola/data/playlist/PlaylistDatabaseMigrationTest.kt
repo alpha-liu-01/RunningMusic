@@ -27,6 +27,39 @@ class PlaylistDatabaseMigrationTest {
         PlaylistDatabase::class.java
     )
 
+    /**
+     * Guards the failure that the migration tests below cannot see: a migration
+     * that is correct but never added to the builder. That one only shows up as
+     * an app that will not start after an upgrade.
+     */
+    @Test
+    fun theRegisteredMigrationsReachTheCurrentVersion() {
+        // @Database is a binary-retention annotation, so it cannot be read
+        // back by reflection. Ask an actual database what version it is.
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val database =
+            Room.inMemoryDatabaseBuilder(context, PlaylistDatabase::class.java).build()
+
+        val currentVersion = try {
+            database.openHelper.readableDatabase.version
+        } finally {
+            database.close()
+        }
+
+        val steps = PLAYLIST_DATABASE_MIGRATIONS
+            .associate { it.startVersion to it.endVersion }
+
+        var version = 1
+        while (version < currentVersion) {
+            val next = steps[version]
+
+            assertNotNull("No migration registered from version $version", next)
+            version = next!!
+        }
+
+        assertEquals(currentVersion, version)
+    }
+
     @Test
     fun migrating2To3KeepsPlaylistsIntact() {
         helper.createDatabase(TEST_DB, 2).use { db ->
