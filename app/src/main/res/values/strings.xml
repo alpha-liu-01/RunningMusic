@@ -274,6 +274,21 @@
     <string name="bpm_manual_desc">Type a tempo to match this track to your running cadence. Leave it empty to clear it.</string>
     <string name="bpm_no_file_identity">This track has no file behind it, so nothing can be saved for it.</string>
 
+    <!-- RunningMusic: tempo analysis -->
+    <string name="tempo_analysis">Tempo analysis</string>
+    <string name="tempo_analysis_desc">Work out the tempo of every track, so running mode has something to match your cadence against.</string>
+    <string name="tempo_analysis_starting">Looking for tracks to analyse…</string>
+    <string name="tempo_analysis_known">%1$d of %2$d tracks have a tempo</string>
+    <string name="tempo_analysis_unknown">%d were analysed but could not be read</string>
+    <string name="tempo_analysis_pending">%d have not been analysed yet</string>
+    <string name="tempo_analysis_start">Analyse</string>
+    <string name="tempo_analysis_cancel">Stop</string>
+    <string name="tempo_analysis_redo">Analyse everything again</string>
+    <string name="tempo_analysis_redo_desc">Discards the tempos this app worked out. Ones you typed in and ones read from tags are kept.</string>
+    <string name="tempo_analysis_charging">Only while charging</string>
+    <string name="tempo_analysis_charging_desc">Waits for the phone to be plugged in. Analysing a whole library is real work for a battery.</string>
+    <string name="tempo_analysis_note">A tempo is stored only when two separate stretches of a track agree on it. Tracks that disagree with themselves are left without one rather than guessed at, because a wrong tempo plays a track at a wildly wrong speed.</string>
+
     <plurals name="delete_tracks">
         <item quantity="one">Delete track</item>
         <item quantity="other">Delete tracks</item>

@@ -191,6 +191,11 @@ tasks.matching { it.name == "preReleaseBuild" }.configureEach {
 
 dependencies {
     implementation(project(":cadence"))
+    // The tempo estimator. Reached only through TempoAnalyser, so the native
+    // library is one implementation of an interface rather than a dependency
+    // the whole analysis pipeline is written against.
+    implementation(project(":aubio"))
+    implementation(libs.androidx.work.runtime.ktx)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

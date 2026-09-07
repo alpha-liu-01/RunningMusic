@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.ui.util.fastMap
 import androidx.datastore.preferences.core.edit
 import com.sosauce.chocola.data.datastore.PreferencesKeys.ALBUM_SORT
+import com.sosauce.chocola.data.datastore.PreferencesKeys.ANALYSE_ONLY_WHILE_CHARGING
 import com.sosauce.chocola.data.datastore.PreferencesKeys.ARTIST_SORT
 import com.sosauce.chocola.data.datastore.PreferencesKeys.EQUALIZER_ENABLED
 import com.sosauce.chocola.data.datastore.PreferencesKeys.EQUALIZER_GAINS
@@ -104,6 +105,18 @@ class UserPreferences(
 
     fun getMinTrackDuration() = context.dataStore.data.map {
         it[MIN_TRACK_DURATION] ?: 0
+    }
+
+    /**
+     * Off by default: someone who just pressed "analyse" wants it to happen, not
+     * to be told to find a charger.
+     */
+    fun getAnalyseOnlyWhileCharging() = context.dataStore.data.map {
+        it[ANALYSE_ONLY_WHILE_CHARGING] ?: false
+    }
+
+    suspend fun setAnalyseOnlyWhileCharging(value: Boolean) = context.dataStore.edit {
+        it[ANALYSE_ONLY_WHILE_CHARGING] = value
     }
 
     suspend fun saveSavedMusicState(musicState: MusicState) =

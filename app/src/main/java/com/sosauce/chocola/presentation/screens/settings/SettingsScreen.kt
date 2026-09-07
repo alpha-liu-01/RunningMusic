@@ -47,6 +47,7 @@ import com.sosauce.chocola.presentation.screens.settings.compenents.SettingsScre
 import com.sosauce.chocola.utils.selfAlignHorizontally
 import com.sosauce.nekobites.animations.AnimatedFab
 import com.sosauce.nekobites.helpers.ObserveAsEvents
+import lol.alphaliu01.runningmusic.analysis.ui.TempoAnalysisScreen
 import lol.alphaliu01.runningmusic.steps.dev.StepRecorderScreen
 import org.koin.androidx.compose.koinViewModel
 import kotlin.uuid.ExperimentalUuidApi
@@ -106,6 +107,12 @@ fun SettingsScreen(
             name = stringResource(R.string.library),
             description = stringResource(R.string.library_desc),
             onNavigate = { backstack.navigate(SettingsScreens.Library) }
+        ))
+        add(Item(
+            icon = R.drawable.speed_rounded,
+            name = stringResource(R.string.tempo_analysis),
+            description = stringResource(R.string.tempo_analysis_desc),
+            onNavigate = { backstack.navigate(SettingsScreens.TempoAnalysis) }
         ))
 
         // Debug-only, and unlocalised for that reason: the sensor spike's
@@ -295,6 +302,16 @@ fun SettingsScreen(
                         onHandleLibraryActions = viewModel::handleLibraryAction,
                         contentPaddingValues = paddingValues
                     )
+                }
+
+                entry<SettingsScreens.TempoAnalysis> {
+                    Column(
+                        modifier = Modifier
+                            .verticalScroll(scrollState)
+                            .padding(paddingValues)
+                    ) {
+                        TempoAnalysisScreen()
+                    }
                 }
 
                 if (BuildConfig.DEBUG) {

@@ -12,6 +12,13 @@
         android:maxSdkVersion="28" /> <!--Android 9-->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!--
+      Tempo analysis runs as a foreground worker so a library-wide pass the user
+      asked for survives the app being backgrounded. dataSync is the type
+      WorkManager uses, and from API 34 it needs its own permission.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission
         android:name="android.permission.ACCESS_NETWORK_STATE"
         tools:node="remove" />
@@ -43,6 +50,18 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+
+
+        <!--
+            WorkManager declares this service itself, but not its foreground
+            type. From API 34 startForeground() refuses a type that the manifest
+            never declared, so the analysis job would crash the first time it
+            promoted itself. Merging the attribute in is the documented fix.
+        -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
 
         <activity

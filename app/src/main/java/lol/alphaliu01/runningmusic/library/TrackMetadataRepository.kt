@@ -83,4 +83,72 @@ class TrackMetadataRepository(
             )
         )
     }
+
+    /**
+     * Records what the file's own tempo tag said.
+     *
+     * Confidence is left null rather than set high: a tag is a claim, and often
+     * enough another detector's claim, so there is no measurement here to attach
+     * a number to.
+     */
+    suspend fun setTaggedBpm(track: CuteTrack, bpm: Float) = write(track) {
+        it.copy(
+            bpm = bpm,
+            bpmConfidence = null,
+            bpmSource = BPM_SOURCE_TAG,
+            analysedAt = System.currentTimeMillis()
+        )
+    }
+
+    /**
+     * Records the outcome of analysing a track, including the outcome "we could
+     * not tell".
+     *
+     * A failure is stored, not skipped. `bpm = null` with the source set and
+     * [TrackMetadata.analysedAt] filled in is what distinguishes a track we
+     * examined and could not read from one nobody has looked at yet, and it is
+     * the only thing stopping the job from decoding its own failures on every
+     * future run.
+     */
+    suspend fun setAnalysedBpm(
+        track: CuteTrack,
+        bpm: Float?,
+        confidence: Float?
+    ) = write(track) {
+        it.copy(
+            bpm = bpm,
+            bpmConfidence = confidence,
+            bpmSource = BPM_SOURCE_ANALYSIS,
+            analysedAt = System.currentTimeMillis()
+        )
+    }
+
+    /** What is already known, keyed durably, for deciding what still needs work. */
+    suspend fun storedByTrackKey(): Map<String, TrackMetadata> =
+        dao.getAll().associateBy { it.trackKey }
+
+    /**
+     * Forgets every tempo the app worked out for itself.
+     *
+     * Hand-entered and tagged tempos survive, because neither came from the
+     * analysis whose parameters changed.
+     */
+    suspend fun clearAnalysed() = dao.deleteBySource(BPM_SOURCE_ANALYSIS)
+
+    private suspend inline fun write(
+        track: CuteTrack,
+        update: (TrackMetadata) -> TrackMetadata
+    ) {
+        val key = track.trackKey ?: return
+
+        val base = dao.get(key) ?: TrackMetadata(trackKey = key)
+
+        dao.upsert(
+            update(base).copy(
+                durationMs = track.durationMs,
+                fileName = track.fileName,
+                lastSeenPath = track.path
+            )
+        )
+    }
 }

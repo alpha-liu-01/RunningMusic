@@ -15,6 +15,12 @@ usable confidence threshold.** Aubio's confidence turned out to be slightly
 number to apply. Plan 8 should not gate on confidence until this is re-run
 against real music.
 
+Plan 8 has since acted on both findings and added two sections at the end of
+"What the run found": [the sample rate](#the-sample-rate-settled), which it
+settled by measurement, and [what two-window agreement does on real
+music](#what-two-window-agreement-does-on-real-music), which is the gate it
+built instead of a confidence threshold.
+
 ## The caveat, before the figures
 
 Everything below was measured on generated audio. There is no real corpus yet.
@@ -205,6 +211,65 @@ the full 30:
 Just under five points of octave accuracy for a third of the audio. Re-measure
 this at the window length plan 8 actually picks, and on real tracks, where 60 to
 90 seconds out of five minutes is a much smaller fraction than 10 out of 30.
+
+### The sample rate, settled
+
+Plan 8 decodes on a phone, so halving the sample rate halves the decoding. The
+question was what it costs. Measured at a 45-second window:
+
+| rate | hop | hop length | octave | strict | played |
+|---|---|---|---|---|---|
+| 44100 | 512 | 12 ms | 97.6% | 76.5% | 91.8% |
+| 22050 | 512 | 23 ms | 96.5% | **32.9%** | 84.7% |
+| 22050 | 256 | 12 ms | 97.6% | 76.5% | 91.8% |
+
+**22050 with a 256-sample hop is free.** It ties 44100 exactly on all three
+metrics, for half the audio decoded and half the audio analysed, so that is what
+[`AnalysisConfig`](../../app/src/main/java/lol/alphaliu01/runningmusic/analysis/BpmAnalyser.kt)
+and [`AubioTempoAnalyser`](../../app/src/main/java/lol/alphaliu01/runningmusic/analysis/AubioTempoAnalyser.kt)
+now use.
+
+The middle row is the interesting one, and the reason this was worth measuring
+rather than assuming. Dropping the sample rate while keeping the hop at 512
+samples collapses strict accuracy by 44 points. Nothing was lost from the audio
+that a beat lives in — a beat is nowhere near 11 kHz. What was lost is *time
+resolution*: a hop is the finest interval at which a beat can be placed, and at
+23 ms the tracker can no longer tell 130 BPM from 133. **A hop is a unit of time,
+not of samples**, and halving the rate means halving the hop to keep it.
+
+Note that octave accuracy barely moved even in that bad configuration, which is
+a reminder of how forgiving the octave metric is and why `played` is the number
+worth watching.
+
+### What two-window agreement does on real music
+
+The synthetic corpus cannot test the agreement gate, because a synthetic track
+is the same throughout by construction and always agrees with itself. Four real
+tracks, on device, at the settings above:
+
+| track | first 45 s | second 45 s | outcome |
+|---|---|---|---|
+| Haddaway, *What Is Love* | 125.76 | 125.72 | stored |
+| Jim Croce, *Workin' At The Car Wash Blues* | 135.01 | 136.00 | stored |
+| 摇滚大鼓李亮节, *红夏利与黄大发* | 191.93 | 191.81 | stored |
+| Hank Williams III, *Six Pack Of Beer* | 155.65 | 103.23 | **refused** |
+
+The three that agree do so to within a tenth of a percent, and the one that
+disagrees does so by a factor of exactly 3:2. That last track really runs at
+about 310 BPM by hand count, so the first window found half-time and the second
+locked onto every third beat — the shuffle underneath fast bluegrass playing.
+
+This is the case the gate exists for, and it is worth being precise about why.
+**Octave folding repairs errors by factors of two and can never repair a factor
+of three.** Storing 103 for a track that folds to 155 would have played it at
+two thirds of the intended speed, which a runner feels immediately. A confidence
+threshold would not have caught it either: the *wrong* window was the more
+confident one, 0.39 against 0.16, which is the anti-correlation of the section
+above showing up again on real music the first time it was asked to.
+
+One refusal in four is too small a sample to call a refusal rate. It does
+establish that the gate fires on genuinely ambiguous material rather than at
+random, which was the open question.
 
 ## Re-running it
 

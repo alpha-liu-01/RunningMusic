@@ -107,6 +107,9 @@ data object PreferencesKeys {
 
     val PAUSE_ON_MUTE = booleanPreferencesKey("PAUSE_ON_MUTE")
     val MIN_TRACK_DURATION = intPreferencesKey("MIN_TRACK_DURATION")
+
+    /** RunningMusic: hold the library-wide tempo pass until the phone is plugged in. */
+    val ANALYSE_ONLY_WHILE_CHARGING = booleanPreferencesKey("ANALYSE_ONLY_WHILE_CHARGING")
     val PLAYLIST_SORT = intPreferencesKey("PLAYLIST_SORT")
     val ARTWORK_SHAPE = stringPreferencesKey("ARTWORK_SHAPE")
     val HAS_BEEN_THROUGH_SETUP = booleanPreferencesKey("HAS_BEEN_THROUGH_SETUP")

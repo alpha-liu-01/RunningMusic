@@ -33,6 +33,14 @@ import com.sosauce.chocola.presentation.screens.transformer.TransformerViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import lol.alphaliu01.runningmusic.analysis.AnalysisConfig
+import lol.alphaliu01.runningmusic.analysis.AubioTempoAnalyser
+import lol.alphaliu01.runningmusic.analysis.BpmAnalyser
+import lol.alphaliu01.runningmusic.analysis.BpmAnalysisManager
+import lol.alphaliu01.runningmusic.analysis.BpmTagReader
+import lol.alphaliu01.runningmusic.analysis.PcmDecoder
+import lol.alphaliu01.runningmusic.analysis.TempoAnalyser
+import lol.alphaliu01.runningmusic.analysis.ui.TempoAnalysisViewModel
 import lol.alphaliu01.runningmusic.library.TrackMetadataRepository
 import lol.alphaliu01.runningmusic.steps.StepRecorder
 import lol.alphaliu01.runningmusic.steps.StepSensors
@@ -74,6 +82,16 @@ val appModule = module {
     singleOf(::PlaylistCleanup)
     singleOf(::TrackMetadataRepository)
 
+    // Tempo analysis. The estimator is bound to the interface rather than to its
+    // own type, so nothing above it names aubio and swapping the engine is one
+    // line here.
+    single { AnalysisConfig() }
+    single<TempoAnalyser> { AubioTempoAnalyser() }
+    singleOf(::PcmDecoder)
+    singleOf(::BpmTagReader)
+    single { BpmAnalyser(decoder = get(), analyser = get(), tags = get(), config = get()) }
+    single { BpmAnalysisManager(androidApplication()) }
+
     // Debug-only step-detector spike. Registered unconditionally because the
     // dev screen that reaches it is gated on BuildConfig.DEBUG; nothing
     // constructs these in a release build.
@@ -98,5 +116,6 @@ val appModule = module {
     viewModelOf(::LyricsEditorViewModel)
     viewModelOf(::SettingsLibraryViewModel)
     viewModelOf(::TracksDetailsDialogViewModel)
+    viewModelOf(::TempoAnalysisViewModel)
     viewModelOf(::StepRecorderViewModel)
 }
