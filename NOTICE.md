@@ -44,6 +44,21 @@ to the runner's cadence. As of this notice the changes are:
 
 Further changes are documented in the git log rather than duplicated here.
 
+## Bundled third-party source
+
+`aubio/vendor/aubio/` is a verbatim copy of the `src/` directory of
+[aubio](https://github.com/aubio/aubio) by Paul Brossier, at commit
+[`ad5cf975`](https://github.com/aubio/aubio/commit/ad5cf975aed08cc4562dd008cf9f83b12b82ffb8)
+(2026-04-10), together with its `COPYING`, `AUTHORS` and `ChangeLog`.
+
+    Copyright (C) 2003-2026 Paul Brossier and the aubio authors
+
+aubio is GPLv3, the same license as this program, so it is bundled unmodified
+and under its own terms. Vendoring the sources in-tree rather than fetching them
+at build time is deliberate: it is what makes the corresponding source of this
+program actually complete. Only the tempo-detection subset is compiled; see
+[aubio/README.md](aubio/README.md).
+
 ## Branding assets
 
 GPLv3 covers the source code, not the branding. The Chocola name and mascot

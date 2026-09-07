@@ -16,6 +16,11 @@ captures/
 output.json
 output-metadata.json
 
+# Editors
+# .vscode/settings.json gets written automatically by the CMake extension once
+# there is native code in the tree, and only records a local path.
+.vscode/
+
 # IntelliJ
 *.iml
 .idea/
