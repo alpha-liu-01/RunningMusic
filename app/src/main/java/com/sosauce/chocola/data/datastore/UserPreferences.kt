@@ -18,6 +18,8 @@ import com.sosauce.chocola.data.datastore.PreferencesKeys.REGEX_FILTER
 import com.sosauce.chocola.data.datastore.PreferencesKeys.RUNNING_LENGTH_MINUTES
 import com.sosauce.chocola.data.datastore.PreferencesKeys.RUNNING_MODE_ENABLED
 import com.sosauce.chocola.data.datastore.PreferencesKeys.RUNNING_TARGET_CADENCE
+import com.sosauce.chocola.data.datastore.PreferencesKeys.RUNNING_TRACKING_MODE
+import lol.alphaliu01.runningmusic.cadence.steps.TrackingMode
 import com.sosauce.chocola.data.datastore.PreferencesKeys.SAF_TRACKS
 import com.sosauce.chocola.data.datastore.PreferencesKeys.SORT_ALBUMS_ASCENDING
 import com.sosauce.chocola.data.datastore.PreferencesKeys.SORT_ARTISTS_ASCENDING
@@ -128,14 +130,26 @@ class UserPreferences(
      */
     fun getRunningSettings() = combine(
         context.dataStore.data.map { it[RUNNING_TARGET_CADENCE] ?: DEFAULT_TARGET_CADENCE },
-        context.dataStore.data.map { it[RUNNING_LENGTH_MINUTES] ?: DEFAULT_RUN_LENGTH_MINUTES }
-    ) { cadence, minutes ->
-        RunningSettings(targetCadence = cadence, runLengthMinutes = minutes)
+        context.dataStore.data.map { it[RUNNING_LENGTH_MINUTES] ?: DEFAULT_RUN_LENGTH_MINUTES },
+        context.dataStore.data.map { prefs ->
+            // An unrecognised name falls back rather than throwing, so a
+            // downgrade after a mode is added leaves the app usable.
+            prefs[RUNNING_TRACKING_MODE]
+                ?.let { name -> TrackingMode.entries.firstOrNull { it.name == name } }
+                ?: DEFAULT_TRACKING_MODE
+        },
+    ) { cadence, minutes, mode ->
+        RunningSettings(
+            targetCadence = cadence,
+            runLengthMinutes = minutes,
+            trackingMode = mode,
+        )
     }
 
     suspend fun setRunningSettings(settings: RunningSettings) = context.dataStore.edit {
         it[RUNNING_TARGET_CADENCE] = settings.targetCadence
         it[RUNNING_LENGTH_MINUTES] = settings.runLengthMinutes
+        it[RUNNING_TRACKING_MODE] = settings.trackingMode.name
     }
 
     fun getRunningModeEnabled() = context.dataStore.data.map {
@@ -214,7 +228,23 @@ data class SearchSettings(
 const val DEFAULT_TARGET_CADENCE = 170
 const val DEFAULT_RUN_LENGTH_MINUTES = 30
 
+/**
+ * Measure once and hold, rather than track continuously.
+ *
+ * The conservative default on purpose. Continuous tracking is a feedback loop
+ * with a human in it: faster music makes a faster runner, which makes faster
+ * music. It is guarded, but the guards are a reason to offer it rather than a
+ * reason to impose it.
+ */
+val DEFAULT_TRACKING_MODE = TrackingMode.MEASURE_THEN_LOCK
+
+/**
+ * @property targetCadence what the runner set, and what the slider shows next
+ * time. A sensor-driven run moves the live target without writing it here: a
+ * measurement is what happened on one run, not a preference.
+ */
 data class RunningSettings(
     val targetCadence: Int,
-    val runLengthMinutes: Int
+    val runLengthMinutes: Int,
+    val trackingMode: TrackingMode = DEFAULT_TRACKING_MODE,
 )

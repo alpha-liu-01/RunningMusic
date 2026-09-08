@@ -316,6 +316,27 @@
     </plurals>
     <string name="running_note">Speed changes at track boundaries, never inside one: switching between one and two steps per beat mid-song would double the speed under you.</string>
 
+    <string name="running_tracking">Cadence source</string>
+    <string name="running_tracking_manual">Slider</string>
+    <string name="running_tracking_lock">Measure</string>
+    <string name="running_tracking_continuous">Follow</string>
+    <string name="running_tracking_manual_desc">The target is whatever you set above, for the whole run.</string>
+    <string name="running_tracking_lock_desc">Runs the first minute at your slider setting while it measures your natural cadence, then matches it and holds it there.</string>
+    <string name="running_tracking_continuous_desc">Measures your cadence, then keeps following it. Moves slowly and never drifts far from what it first measured, because music that chases you is music you keep chasing back.</string>
+    <string name="running_tracking_permission">Reading your cadence needs permission to detect steps.</string>
+    <string name="running_tracking_permission_grant">Allow step detection</string>
+    <string name="running_tracking_no_sensor">This device has no step detector, so the target can only come from the slider.</string>
+    <string name="running_tracking_refused">The step detector would not start. The target is staying where you set it.</string>
+    <string name="running_tracking_nonwakeup">Using the non-wakeup step detector, which may miss steps once the screen is off.</string>
+    <string name="running_tracking_measuring">Measuring your cadence</string>
+    <string name="running_tracking_measured">Measuring: %1$s spm</string>
+    <string name="running_tracking_locked">Matched to your %1$s spm</string>
+    <string name="running_motion_starting">Waiting for your first steps</string>
+    <string name="running_motion_running">Running</string>
+    <string name="running_motion_walking">Walking, holding the target</string>
+    <string name="running_motion_stopped">Stopped, holding the target</string>
+    <string name="running_motion_sensor_lost">No steps arriving, holding the target</string>
+
     <plurals name="delete_tracks">
         <item quantity="one">Delete track</item>
         <item quantity="other">Delete tracks</item>

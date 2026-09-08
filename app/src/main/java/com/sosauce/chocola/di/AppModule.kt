@@ -42,6 +42,7 @@ import lol.alphaliu01.runningmusic.analysis.PcmDecoder
 import lol.alphaliu01.runningmusic.analysis.TempoAnalyser
 import lol.alphaliu01.runningmusic.analysis.ui.TempoAnalysisViewModel
 import lol.alphaliu01.runningmusic.library.TrackMetadataRepository
+import lol.alphaliu01.runningmusic.running.CadenceTracker
 import lol.alphaliu01.runningmusic.running.RunningModeManager
 import lol.alphaliu01.runningmusic.running.ui.RunningViewModel
 import lol.alphaliu01.runningmusic.steps.StepRecorder
@@ -98,10 +99,15 @@ val appModule = module {
     // to keep re-speeding the player after the activity that started it is gone.
     singleOf(::RunningModeManager)
 
+    // Holds a sensor registration for the length of a run, so it has to outlive
+    // any screen for the same reason the manager does.
+    singleOf(::CadenceTracker)
+
+    singleOf(::StepSensors)
+
     // Debug-only step-detector spike. Registered unconditionally because the
     // dev screen that reaches it is gated on BuildConfig.DEBUG; nothing
-    // constructs these in a release build.
-    singleOf(::StepSensors)
+    // constructs it in a release build.
     singleOf(::StepRecorder)
 
 

@@ -13,7 +13,12 @@
 #   scripts/step-spike.sh stop
 #   scripts/step-spike.sh pull [dest]
 #   scripts/step-spike.sh summary [dest] [expected-steps]
+#   scripts/step-spike.sh replay [dest] [manual|lock|continuous]
 #   scripts/step-spike.sh status
+#
+# Running mode writes a recording of its own on every tracked run in debug
+# builds, into the same directory, so after a real run `pull` then `replay`
+# shows what the control loop did and why.
 #
 # Untethered over WiFi, set ANDROID_SERIAL so the link can be re-established
 # after the phone sleeps and drops it:
@@ -114,6 +119,11 @@ cmd_summary() {
   ./gradlew -q :cadence:recordingSummary --args="$args"
 }
 
+cmd_replay() {
+  local dest="${1:-$DEST}" mode="${2:-continuous}"
+  ./gradlew -q :cadence:cadenceReplay --args="$dest --mode $mode"
+}
+
 cmd_status() {
   echo "--- foreground service ---"
   adb shell dumpsys activity services $PKG | grep -E "isForeground|types=" || echo "not running"
@@ -128,6 +138,7 @@ case "${1:-}" in
   stop)    cmd_stop ;;
   pull)    shift; cmd_pull "$@" ;;
   summary) shift; cmd_summary "$@" ;;
+  replay)  shift; cmd_replay "$@" ;;
   status)  cmd_status ;;
   *) usage ;;
 esac

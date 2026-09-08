@@ -9,16 +9,13 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Runtime permission since API 29; below that the step detector is free. -->
-    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <!--
+        ACTIVITY_RECOGNITION and the stepdetector uses-feature moved to the main
+        manifest when running mode started driving its target from the sensor.
+        What is left here is only what the experiment needs and the app does not.
+    -->
     <!-- So the recorder service can be A/B tested against the mediaPlayback type. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
-    <!-- Without this the foreground notification is silently invisible on API 33+. -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <uses-feature
-        android:name="android.hardware.sensor.stepdetector"
-        android:required="false" />
 
     <application>
         <!--

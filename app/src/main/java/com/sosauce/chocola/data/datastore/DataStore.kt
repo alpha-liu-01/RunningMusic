@@ -151,6 +151,12 @@ data object PreferencesKeys {
     val RUNNING_TARGET_CADENCE = intPreferencesKey("RUNNING_TARGET_CADENCE")
     val RUNNING_LENGTH_MINUTES = intPreferencesKey("RUNNING_LENGTH_MINUTES")
 
+    /**
+     * Stored by name rather than by ordinal, so reordering [TrackingMode] cannot
+     * silently turn somebody's manual runs into sensor-driven ones.
+     */
+    val RUNNING_TRACKING_MODE = stringPreferencesKey("RUNNING_TRACKING_MODE")
+
 }
 
 

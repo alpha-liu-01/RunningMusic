@@ -19,6 +19,23 @@
     -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!--
+      Running mode drives its target cadence from the step detector. A runtime
+      permission from API 29; minSdk is 28, and below 29 the detector needs no
+      permission at all, which Context.hasStepPermission() handles.
+
+      Notably absent: FOREGROUND_SERVICE_HEALTH. The sensor spike established
+      that the wakeup step detector keeps delivering under the mediaPlayback
+      foreground service PlaybackService already runs, through 61% CPU suspend,
+      so a second service type would be a permission asked for and not needed.
+      It stays in the debug manifest, where the experiment that ruled it out is.
+    -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+
+    <!-- Required=false: the app is a music player first, and works without one. -->
+    <uses-feature
+        android:name="android.hardware.sensor.stepdetector"
+        android:required="false" />
     <uses-permission
         android:name="android.permission.ACCESS_NETWORK_STATE"
         tools:node="remove" />

@@ -3,6 +3,8 @@
 package lol.alphaliu01.runningmusic.running.ui
 
 import android.text.format.DateUtils
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
 import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,14 +21,21 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberSliderState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,6 +47,12 @@ import com.sosauce.chocola.presentation.screens.playing.components.WavySlider
 import com.sosauce.chocola.utils.selfAlignHorizontally
 import com.sosauce.nekobites.animations.AnimatedFab
 import lol.alphaliu01.runningmusic.cadence.ToleranceBand
+import lol.alphaliu01.runningmusic.cadence.steps.Motion
+import lol.alphaliu01.runningmusic.cadence.steps.TrackingMode
+import lol.alphaliu01.runningmusic.running.CadenceTrackerState
+import lol.alphaliu01.runningmusic.running.CadenceUnavailable
+import lol.alphaliu01.runningmusic.steps.hasStepPermission
+import lol.alphaliu01.runningmusic.steps.stepPermissionsToRequest
 import org.koin.androidx.compose.koinViewModel
 import kotlin.math.roundToInt
 
@@ -76,8 +91,12 @@ fun RunningScreen(onNavigateBack: () -> Unit) {
                 .padding(paddingValues),
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
+            InfoCard(topDp = 24.dp, bottomDp = 4.dp) {
+                TrackingModes(ui, onSelect = viewModel::setTrackingMode)
+            }
+
             ValueCard(
-                topDp = 24.dp,
+                topDp = 4.dp,
                 bottomDp = 4.dp,
                 label = stringResource(R.string.running_cadence),
                 value = ui.settings.targetCadence,
@@ -181,10 +200,86 @@ private fun Coverage(ui: RunningUi, onUseSuggestion: () -> Unit) {
     }
 }
 
+/**
+ * Where the target comes from.
+ *
+ * Three options rather than a switch because the middle one is the interesting
+ * default and the hardest to name. Measuring once and holding is safe; following
+ * continuously puts a human inside a feedback loop, and is offered rather than
+ * assumed.
+ */
+@Composable
+private fun TrackingModes(ui: RunningUi, onSelect: (TrackingMode) -> Unit) {
+    val context = LocalContext.current
+    val selected = ui.settings.trackingMode
+
+    // Re-read after the dialog rather than remembered from composition, since the
+    // answer can change while this screen is on top of it.
+    var permitted by remember { mutableStateOf(context.hasStepPermission()) }
+    val request = rememberLauncherForActivityResult(RequestMultiplePermissions()) {
+        permitted = context.hasStepPermission()
+    }
+
+    Text(stringResource(R.string.running_tracking))
+
+    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+        TrackingMode.entries.forEachIndexed { index, mode ->
+            SegmentedButton(
+                selected = mode == selected,
+                onClick = { onSelect(mode) },
+                enabled = mode == TrackingMode.MANUAL || ui.hasStepDetector,
+                shape = SegmentedButtonDefaults.itemShape(index, TrackingMode.entries.size)
+            ) {
+                Text(stringResource(mode.label))
+            }
+        }
+    }
+
+    Muted(stringResource(selected.description))
+
+    when {
+        !ui.hasStepDetector -> Muted(stringResource(R.string.running_tracking_no_sensor))
+
+        selected == TrackingMode.MANUAL -> Unit
+
+        !permitted -> {
+            Muted(stringResource(R.string.running_tracking_permission))
+            TextButton(onClick = { request.launch(stepPermissionsToRequest()) }) {
+                Text(stringResource(R.string.running_tracking_permission_grant))
+            }
+        }
+
+        ui.tracking.unavailable == CadenceUnavailable.REFUSED ->
+            Muted(stringResource(R.string.running_tracking_refused))
+
+        // Worth saying out loud. The non-wakeup detector stops delivering when
+        // the processor suspends, which on a run with the screen off is most of
+        // the time, so tracking will quietly be much worse than it looks here.
+        ui.tracking.active && !ui.tracking.wakeUp ->
+            Muted(stringResource(R.string.running_tracking_nonwakeup))
+    }
+}
+
+private val TrackingMode.label: Int
+    get() = when (this) {
+        TrackingMode.MANUAL -> R.string.running_tracking_manual
+        TrackingMode.MEASURE_THEN_LOCK -> R.string.running_tracking_lock
+        TrackingMode.CONTINUOUS -> R.string.running_tracking_continuous
+    }
+
+private val TrackingMode.description: Int
+    get() = when (this) {
+        TrackingMode.MANUAL -> R.string.running_tracking_manual_desc
+        TrackingMode.MEASURE_THEN_LOCK -> R.string.running_tracking_lock_desc
+        TrackingMode.CONTINUOUS -> R.string.running_tracking_continuous_desc
+    }
+
 @Composable
 private fun InProgress(ui: RunningUi) {
     val current = ui.run.current
     val summary = ui.run.summary
+
+    if (ui.tracking.active) Tracking(ui.tracking)
 
     if (current != null) {
         Text(
@@ -217,6 +312,40 @@ private fun InProgress(ui: RunningUi) {
         }
     }
 }
+
+/**
+ * What the step detector currently believes.
+ *
+ * Shows the motion state rather than only the number, because "stopped" and
+ * "walking" are the two moments when the music deliberately ignores what the
+ * runner is doing, and a target that visibly refuses to move needs to say why.
+ */
+@Composable
+private fun Tracking(tracking: CadenceTrackerState) {
+    val measured = tracking.measuredSpm
+
+    Text(
+        when {
+            measured == null -> stringResource(R.string.running_tracking_measuring)
+            tracking.locked -> stringResource(R.string.running_tracking_locked, spm(measured))
+            else -> stringResource(R.string.running_tracking_measured, spm(measured))
+        }
+    )
+
+    Muted(
+        stringResource(
+            when (tracking.motion) {
+                Motion.STARTING -> R.string.running_motion_starting
+                Motion.RUNNING -> R.string.running_motion_running
+                Motion.WALKING -> R.string.running_motion_walking
+                Motion.STOPPED -> R.string.running_motion_stopped
+                Motion.SENSOR_LOST -> R.string.running_motion_sensor_lost
+            }
+        )
+    )
+}
+
+private fun spm(value: Double) = "%.0f".format(value)
 
 /**
  * The stretch a set of tracks actually needed, as the two-sided figure it is.

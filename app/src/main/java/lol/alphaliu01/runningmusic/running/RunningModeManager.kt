@@ -27,8 +27,12 @@ import lol.alphaliu01.runningmusic.cadence.Selected
 import lol.alphaliu01.runningmusic.cadence.ToleranceBand
 import lol.alphaliu01.runningmusic.cadence.foldAt
 import lol.alphaliu01.runningmusic.cadence.selectForRun
+import lol.alphaliu01.runningmusic.cadence.steps.LoopConfig
+import lol.alphaliu01.runningmusic.cadence.steps.TrackingMode
+import lol.alphaliu01.runningmusic.cadence.suggestCadence
 import lol.alphaliu01.runningmusic.library.TrackMetadataRepository
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
 /** How many tracks past the one playing the player is allowed to know about. */
@@ -52,6 +56,13 @@ private const val ATTACH_TIMEOUT_MS = 2_000L
 private const val ATTACH_POLL_MS = 50L
 
 private const val MINUTE_MS = 60_000L
+
+/**
+ * Taken from the control loop rather than restated, so the slider, the loop and
+ * the library nudge cannot drift apart into three different ideas of what counts
+ * as a running cadence.
+ */
+private val CADENCE_RANGE = LoopConfig().cadenceRange
 
 /** The tempo, stretch and steps-per-beat of whatever is playing right now. */
 data class RunningTrack(
@@ -102,11 +113,18 @@ class RunningModeManager(
     scanner: AbstractTracksScanner,
     metadata: TrackMetadataRepository,
     private val userPreferences: UserPreferences,
+    private val cadenceTracker: CadenceTracker,
     private val scope: CoroutineScope,
 ) {
 
     private val _state = MutableStateFlow(RunningState())
     val state: StateFlow<RunningState> = _state.asStateFlow()
+
+    /** What the step detector is doing, passed through so the UI has one source. */
+    val tracking: StateFlow<CadenceTrackerState> = cadenceTracker.state
+
+    /** False on hardware with no step detector, where only the slider can drive. */
+    fun hasStepDetector(): Boolean = cadenceTracker.capabilities().hasAnyDetector
 
     /**
      * The analysed part of the library, in the shape the cadence maths wants.
@@ -144,6 +162,7 @@ class RunningModeManager(
     fun detach() {
         player = null
         rampJob?.cancel()
+        cadenceTracker.stop()
         librarySubscription?.cancel()
         librarySubscription = null
         plan = null
@@ -202,10 +221,72 @@ class RunningModeManager(
 
             ramp(materialised.current!!.fold.speed.toFloat())
         }
+
+        // Started once the run is audibly under way. The opening minute plays at
+        // whatever the runner set, which is the whole reason the slider survives
+        // into a tracked run rather than being replaced by it.
+        startTracking(settings)
     }
 
     /**
-     * Moves the target, during a run or before one.
+     * Hands the target to the step detector for the rest of the run.
+     *
+     * The library-fit nudge is applied once, at the lock, and then carried as a
+     * fixed offset. Re-running it on every update would let a one spm change in
+     * what the runner is doing move the target by up to the suggestion radius,
+     * because coverage is a lumpy function of cadence — which is the entire
+     * reason the nudge exists, and exactly why it must not be inside the loop.
+     */
+    private fun startTracking(settings: RunningSettings) {
+        var offset: Int? = null
+
+        cadenceTracker.start(
+            mode = settings.trackingMode,
+            initialTarget = settings.targetCadence,
+        ) { measured ->
+            scope.launch {
+                val nudge = offset ?: (snapToLibrary(measured) - measured).also { offset = it }
+                applyCadence((measured + nudge).coerceIn(CADENCE_RANGE))
+            }
+        }
+    }
+
+    /**
+     * Moves a measured cadence onto one the library can actually fill a run at.
+     *
+     * A runner measured at 170 is sitting at the worst case of the octave fold
+     * for the largest tempo cluster in most libraries, and a few spm either way
+     * can unlock a large part of it. Nudging a runner slightly is defensible;
+     * playing them 40 minutes of badly stretched music is not.
+     */
+    private fun snapToLibrary(measured: Int): Int {
+        val library = library.value
+        if (library.isEmpty()) return measured
+        return suggestCadence(library, measured.toDouble()).best.cadence.roundToInt()
+    }
+
+    /**
+     * The runner moved the target themselves.
+     *
+     * A hand on the slider ends sensor tracking for the rest of the run. Leaving
+     * it running would mean the loop quietly undoing a deliberate correction a
+     * minute later, and there is no way to present that which does not look like
+     * a bug.
+     */
+    suspend fun setCadence(targetCadence: Int) {
+        cadenceTracker.stop()
+        userPreferences.setRunningSettings(storedSettings().copy(targetCadence = targetCadence))
+        applyCadence(targetCadence)
+    }
+
+    /**
+     * Moves the target, during a run or before one, without persisting it.
+     *
+     * Persistence is the caller's decision because the two sources differ in
+     * kind: a slider is a preference and belongs in DataStore, while a
+     * measurement is a fact about one run and does not. Writing the latter would
+     * mean a runner who tracked once finds their slider somewhere new every time
+     * they open the screen.
      *
      * The steps-per-beat exponent of a playing track is deliberately kept.
      * Recomputing it could flip a track from two steps per beat to one, and
@@ -213,9 +294,8 @@ class RunningModeManager(
      * it is clamped, so a large drift leaves the track slightly off target rather
      * than unlistenable. Everything not yet playing is replanned freely.
      */
-    suspend fun setCadence(targetCadence: Int) {
+    private suspend fun applyCadence(targetCadence: Int) {
         val settings = currentSettings().copy(targetCadence = targetCadence)
-        userPreferences.setRunningSettings(settings)
         _state.update { it.copy(settings = settings) }
 
         if (!_state.value.active) return
@@ -265,10 +345,24 @@ class RunningModeManager(
         }
     }
 
-    suspend fun setRunLength(minutes: Int) {
-        val settings = currentSettings().copy(runLengthMinutes = minutes)
-        userPreferences.setRunningSettings(settings)
-        _state.update { it.copy(settings = settings) }
+    suspend fun setRunLength(minutes: Int) = persist { it.copy(runLengthMinutes = minutes) }
+
+    suspend fun setTrackingMode(mode: TrackingMode) = persist { it.copy(trackingMode = mode) }
+
+    /**
+     * Writes one field through to DataStore and mirrors it into the live state.
+     *
+     * Built from the stored settings rather than from [RunningState.settings],
+     * which during a tracked run holds a measured cadence. Reading the live
+     * state here would mean changing the run length halfway round a run silently
+     * saved the sensor's target as the runner's preference.
+     */
+    private suspend fun persist(change: (RunningSettings) -> RunningSettings) {
+        val stored = change(storedSettings())
+        userPreferences.setRunningSettings(stored)
+        _state.update { previous ->
+            previous.copy(settings = previous.settings?.let(change) ?: stored)
+        }
     }
 
     /**
@@ -304,12 +398,18 @@ class RunningModeManager(
 
     /** Ends the run and hands the player back at its normal speed. */
     suspend fun endRun() {
+        cadenceTracker.stop()
         librarySubscription?.cancel()
         librarySubscription = null
         plan = null
 
         val wasActive = _state.value.active
-        _state.update { it.copy(active = false, summary = null, current = null) }
+
+        // Reloaded rather than kept. A tracked run leaves a measured cadence in
+        // the live state, and carrying that out of the run would turn one run's
+        // measurement into the runner's saved preference by the back door.
+        val stored = storedSettings()
+        _state.update { it.copy(active = false, summary = null, current = null, settings = stored) }
         userPreferences.setRunningModeEnabled(false)
 
         if (wasActive) withContext(Dispatchers.Main.immediate) { ramp(1f) }
@@ -333,9 +433,13 @@ class RunningModeManager(
     /** The stored settings, for a screen opening before any run has started. */
     suspend fun currentSettings(): RunningSettings =
         _state.value.settings
-            ?: userPreferences.getRunningSettings().first().also { settings ->
+            ?: storedSettings().also { settings ->
                 _state.update { if (it.settings == null) it.copy(settings = settings) else it }
             }
+
+    /** What is actually saved, which during a tracked run is not what is playing. */
+    private suspend fun storedSettings(): RunningSettings =
+        userPreferences.getRunningSettings().first()
 
     /**
      * PlaybackService is started by the media controller the UI connects on

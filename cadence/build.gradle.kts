@@ -47,6 +47,16 @@ tasks.register<JavaExec>("recordingSummary") {
     workingDir = rootDir
 }
 
+// Run with:
+//   ./gradlew :cadence:cadenceReplay --args="cadence/src/test/resources/fixtures --mode continuous"
+tasks.register<JavaExec>("cadenceReplay") {
+    group = "verification"
+    description = "Replays a recorded run through the cadence control loop."
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "lol.alphaliu01.runningmusic.cadence.cli.CadenceReplayKt"
+    workingDir = rootDir
+}
+
 // Needs bpm_probe built first, so scripts/bpm-eval.sh is the usual way in.
 // Directly:
 //   ./gradlew :cadence:bpmEval --args="--analyse-seconds 60"

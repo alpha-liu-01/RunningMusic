@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import lol.alphaliu01.runningmusic.cadence.CadenceSuggestion
@@ -19,7 +22,9 @@ import lol.alphaliu01.runningmusic.cadence.RunQueue
 import lol.alphaliu01.runningmusic.cadence.ToleranceBand
 import lol.alphaliu01.runningmusic.cadence.coverageAt
 import lol.alphaliu01.runningmusic.cadence.selectForRun
+import lol.alphaliu01.runningmusic.cadence.steps.TrackingMode
 import lol.alphaliu01.runningmusic.cadence.suggestCadence
+import lol.alphaliu01.runningmusic.running.CadenceTrackerState
 import lol.alphaliu01.runningmusic.running.RunningModeManager
 import lol.alphaliu01.runningmusic.running.RunningState
 
@@ -48,6 +53,10 @@ data class RunningUi(
     val run: RunningState = RunningState(),
     /** Tracks in the library with no tempo, which no cadence can reach. */
     val withoutTempo: Int = 0,
+    /** What the step detector is doing, if it is doing anything. */
+    val tracking: CadenceTrackerState = CadenceTrackerState(),
+    /** False on hardware with no step detector, where the slider is the only source. */
+    val hasStepDetector: Boolean = true,
 )
 
 /**
@@ -69,12 +78,15 @@ class RunningViewModel(
 
     private val preview = MutableStateFlow<RunningSettings?>(null)
 
+    private val hasStepDetector = manager.hasStepDetector()
+
     val ui: StateFlow<RunningUi> = combine(
         manager.state,
         manager.library,
         scanner.latestTracks,
         preview,
-    ) { run, library, allTracks, previewed ->
+        manager.tracking,
+    ) { run, library, allTracks, previewed, tracking ->
         val settings = previewed
             ?: run.settings
             ?: RunningSettings(DEFAULT_TARGET_CADENCE, DEFAULT_RUN_LENGTH_MINUTES)
@@ -87,11 +99,24 @@ class RunningViewModel(
             plan = selectForRun(library, cadence, settings.runLengthMinutes * 60_000L),
             run = run,
             withoutTempo = (allTracks.size - library.size).coerceAtLeast(0),
+            tracking = tracking,
+            hasStepDetector = hasStepDetector,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RunningUi())
 
     init {
         viewModelScope.launch { preview.value = manager.currentSettings() }
+
+        // A tracked run moves the target without anyone touching the slider, and
+        // a slider that did not follow would be reporting the cadence the run
+        // started at for the rest of it.
+        viewModelScope.launch {
+            manager.state
+                .map { if (it.active) it.settings?.targetCadence else null }
+                .filterNotNull()
+                .distinctUntilChanged()
+                .collect { cadence -> preview.value = current().copy(targetCadence = cadence) }
+        }
     }
 
     /** Follows the slider. Cheap, and writes nothing. */
@@ -115,6 +140,12 @@ class RunningViewModel(
     fun commitRunLength() {
         val minutes = current().runLengthMinutes
         viewModelScope.launch { manager.setRunLength(minutes) }
+    }
+
+    /** Applied at once rather than on a commit: it is a tap, not a drag. */
+    fun setTrackingMode(mode: TrackingMode) {
+        preview.value = current().copy(trackingMode = mode)
+        viewModelScope.launch { manager.setTrackingMode(mode) }
     }
 
     fun useSuggestedCadence() {
