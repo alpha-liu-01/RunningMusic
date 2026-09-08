@@ -59,6 +59,34 @@ step receives a mangled string.
 Then dispatch the "Release Stable CI" workflow by hand; it has no trigger other
 than `workflow_dispatch`.
 
+## CI
+
+The workflow has to compile aubio, so it cannot just set up a JDK and call
+Gradle. Before the keystore is decoded it:
+
+1. Installs Temurin 21, which is the daemon JVM pinned in
+   `gradle/gradle-daemon-jvm.properties`.
+2. Restores a cached Android SDK, keyed on
+   [`scripts/setup-android-sdk.sh`](../../scripts/setup-android-sdk.sh), then
+   runs that script. The script is the same one a local machine uses, so CI
+   gets the same `ndk;29.0.14206865` and `cmake;3.31.6` the native module pins.
+3. Decodes `SIGNING_KEY` and builds with `./gradlew :cadence:test assembleRelease`.
+   Recording stays off; this is a shipped APK.
+
+After the APK exists, two checks have to pass or nothing is published:
+
+- [`scripts/check-so-alignment.sh`](../../scripts/check-so-alignment.sh) on the
+  APK, not the aubio AAR. The APK also packs taglib's libraries, and Android 15
+  will refuse any of them aligned to 4 KB.
+- `apksigner verify --print-certs`, so an unsigned or wrongly-signed output
+  cannot become a GitHub Release.
+
+The keystore is deleted after the build even if the build failed. The four
+secret names above are unchanged.
+
+Nightly (`nightly_build.yml`) installs the same SDK and JDK so `assembleDebug`
+can compile C. It does not use the release keystore.
+
 ## Building a signed release locally
 
 The build looks for the keystore at `app/release_key.jks` — the same path CI
