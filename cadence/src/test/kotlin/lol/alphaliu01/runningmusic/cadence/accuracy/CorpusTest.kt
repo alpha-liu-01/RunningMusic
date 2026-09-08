@@ -98,7 +98,7 @@ class CorpusTest {
 
     @Test
     fun `the committed manifest parses and is still empty of data`() {
-        val committed = File("docs/private/bpm-corpus.tsv")
+        val committed = File("cadence/src/test/resources/bpm-corpus.tsv")
         assertTrue(committed.isFile, "expected ${committed.absolutePath} to exist")
 
         val manifest = parseManifest(committed)
