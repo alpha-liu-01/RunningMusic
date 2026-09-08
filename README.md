@@ -6,7 +6,7 @@
   <a href="https://github.com/alpha-liu-01/RunningMusic/releases">
     <img src="https://img.shields.io/github/v/release/alpha-liu-01/RunningMusic?style=for-the-badge&logo=github" alt="Latest release"/>
   </a>
-  <img src="https://img.shields.io/badge/Kotlin-100%25-7F52FF?style=for-the-badge&logo=Kotlin" alt="Kotlin"/>
+  <img src="https://img.shields.io/badge/Kotlin-96%25-7F52FF?style=for-the-badge&logo=Kotlin" alt="Kotlin"/>
   <img src="https://img.shields.io/badge/License-GPLv3-blue?style=for-the-badge" alt="GPLv3"/>
 </p>
 
@@ -18,14 +18,17 @@ RunningMusic is a fork of [Chocola](https://github.com/sosauce/Chocola) (formerl
 CuteMusic) by [sosauce](https://github.com/sosauce), a fast, offline, Material 3
 Expressive music player for Android.
 
-The fork exists to add cadence-aware playback: analyse each track's BPM, detect
-your step rate while you run, and build a queue whose tempo lines up with your
+The fork adds cadence-aware playback: analyse each track's BPM, detect your
+step rate while you run, and build a queue whose tempo lines up with your
 stride. Everything Chocola already does — the library, the metadata editor, the
 lyrics support, the equalizer — comes along unchanged.
 
-**This is early-stage and not yet released.** The cadence features are still
-being built; what is here today is Chocola plus the fork's build and branding
-setup.
+**0.1.0 is the first public release.** The cadence features work, and they need
+real runs to shake out bugs that a short test loop will not find.
+
+Tempo estimation uses [aubio](https://github.com/aubio/aubio), compiled as
+native C and called from Kotlin, which is why the project is no longer
+Kotlin-only.
 
 ## Inherited from Chocola
 
@@ -38,13 +41,20 @@ setup.
 - Speed and pitch control, repeat modes and a sleep timer
 - Fully offline, small install footprint, no unnecessary permissions
 
-## Planned
+## RunningMusic
 
-- Per-track BPM analysis with a durable, rescan-proof cache
-- Sort and filter the library by BPM
-- Step-rate detection and cadence matching, with octave folding so a 170 BPM
-  track and an 85 BPM track can both suit a 170 spm cadence
-- Queues built to fill a target run length
+- Per-track BPM analysis, using an existing TBPM/BPM tag when the file has one,
+  otherwise aubio. Results are stored in a cache that survives MediaStore
+  rescans
+- Sort the library by BPM
+- Step-rate detection from the phone's step counter, including with the screen
+  off
+- Cadence matching with octave folding, so a 170 BPM track and an 85 BPM track
+  can both suit a 170 spm run (and a walk can use the pop/EDM 120 BPM cluster)
+- A stretch tolerance you can tighten or loosen, plus a suggested nearby
+  cadence when your library would cover that one better
+- Running mode: a queue built to fill a target duration, playback speed folded
+  to your cadence, and the freedom to pick another track without ending the run
 
 ## Building
 
@@ -54,10 +64,11 @@ then `./gradlew assembleDebug`.
 
 ## Credits
 
-Chocola, and therefore almost all of the code here, is the work of
-[sosauce](https://github.com/sosauce) and Chocola's contributors. If you like
-this app, the person to thank and to support is sosauce — their support page is
-linked from the app's About screen.
+Chocola, and therefore most of the code here, is the work of
+[sosauce](https://github.com/sosauce) and Chocola's contributors.
+
+The heart button on the About screen supports this fork:
+[buymeacoffee.com/alphaliu01](https://buymeacoffee.com/alphaliu01).
 
 Chocola's existing translations remain in this tree. Simplified Chinese and
 French for RunningMusic's own strings (cadence, tempo analysis, running mode)

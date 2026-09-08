@@ -21,7 +21,7 @@ import com.sosauce.chocola.presentation.screens.playing.components.WavyTrack
 const val CUTE_MUSIC_ID = "CUTE_MUSIC_ID"
 const val ICON_TEXT_SPACING = 5
 const val GITHUB_RELEASES = "https://github.com/alpha-liu-01/RunningMusic/releases"
-const val SUPPORT_PAGE = "https://sosauce.github.io/support/"
+const val SUPPORT_PAGE = "https://buymeacoffee.com/alphaliu01"
 
 
 object SharedTransitionKeys {

@@ -49,8 +49,8 @@ android {
         applicationId = "lol.alphaliu01.runningmusic"
         minSdk = 28
         targetSdk = 37
-        versionCode = 50009
-        versionName = "4.4.1"
+        versionCode = 50010
+        versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
