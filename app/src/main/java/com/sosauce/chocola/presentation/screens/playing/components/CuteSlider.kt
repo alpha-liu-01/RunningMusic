@@ -91,7 +91,10 @@ fun CuteSlider(
         sliderState.value = animatedPosition
     }
 
-    val multiplier = if (dynamicDuration) musicState.speed else 1f
+    // In running mode every track plays at a non-unity speed by design, so the
+    // uncorrected time would be wrong for the whole run rather than occasionally.
+    // The setting stops being a curiosity and becomes the only correct reading.
+    val multiplier = if (dynamicDuration || musicState.runningMode) musicState.speed else 1f
     val currentFormattedTime =
         DateUtils.formatElapsedTime(((musicState.position / multiplier) / 1000).toLong())
     val totalFormattedTime =

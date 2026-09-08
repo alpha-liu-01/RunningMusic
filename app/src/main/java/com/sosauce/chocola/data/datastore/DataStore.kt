@@ -9,6 +9,7 @@ import androidx.datastore.core.DataMigration
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
@@ -107,6 +108,9 @@ data object PreferencesKeys {
 
     val PAUSE_ON_MUTE = booleanPreferencesKey("PAUSE_ON_MUTE")
     val MIN_TRACK_DURATION = intPreferencesKey("MIN_TRACK_DURATION")
+
+    /** RunningMusic: hold the library-wide tempo pass until the phone is plugged in. */
+    val ANALYSE_ONLY_WHILE_CHARGING = booleanPreferencesKey("ANALYSE_ONLY_WHILE_CHARGING")
     val PLAYLIST_SORT = intPreferencesKey("PLAYLIST_SORT")
     val ARTWORK_SHAPE = stringPreferencesKey("ARTWORK_SHAPE")
     val HAS_BEEN_THROUGH_SETUP = booleanPreferencesKey("HAS_BEEN_THROUGH_SETUP")
@@ -135,6 +139,33 @@ data object PreferencesKeys {
 
     val NOW_PLAYING_SHAPE_MORPH = booleanPreferencesKey("NOW_PLAYING_SHAPE_MORPH")
 
+    /**
+     * RunningMusic: the settings a run is started from, and a record that one was
+     * under way.
+     *
+     * The record exists because a run cannot survive the process being killed:
+     * the plan only lives in memory. What outlives it is the odd playback speed
+     * the run left behind in the saved music state, and this is how that speed is
+     * recognised as meaningless rather than restored.
+     */
+    val RUNNING_MODE_ENABLED = booleanPreferencesKey("RUNNING_MODE_ENABLED")
+    val RUNNING_TARGET_CADENCE = intPreferencesKey("RUNNING_TARGET_CADENCE")
+    val RUNNING_LENGTH_MINUTES = intPreferencesKey("RUNNING_LENGTH_MINUTES")
+
+    /**
+     * Stored by name rather than by ordinal, so reordering [TrackingMode] cannot
+     * silently turn somebody's manual runs into sensor-driven ones.
+     */
+    val RUNNING_TRACKING_MODE = stringPreferencesKey("RUNNING_TRACKING_MODE")
+
+    /**
+     * The two halves of the stretch tolerance, stored as the ratios the cadence
+     * maths uses rather than as the percentages the screen shows: 1.15 for "up
+     * to 15% faster". Kept apart because they are genuinely independent — adding
+     * energy by speeding a track up is not the same trade as dragging one down.
+     */
+    val RUNNING_MAX_SPEED_UP = floatPreferencesKey("RUNNING_MAX_SPEED_UP")
+    val RUNNING_MAX_SLOW_DOWN = floatPreferencesKey("RUNNING_MAX_SLOW_DOWN")
 }
 
 

@@ -50,6 +50,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import lol.alphaliu01.runningmusic.running.RunningModeManager
 import java.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -57,7 +58,8 @@ class MusicViewModel(
     private val application: Application,
     private val userPreferences: UserPreferences,
     private val lyricsParser: LyricsParser,
-    private val abstractTracksScanner: AbstractTracksScanner
+    private val abstractTracksScanner: AbstractTracksScanner,
+    private val runningMode: RunningModeManager
 ) : AndroidViewModel(application) {
 
     private var mediaController: MediaController? = null
@@ -279,6 +281,15 @@ class MusicViewModel(
     }
 
     init {
+        // Running mode lives in a singleton the playback service drives, so its
+        // state has to be pulled back into the UI's view of playback rather than
+        // being set from here.
+        viewModelScope.launch {
+            runningMode.state.collect { running ->
+                _musicState.update { it.copy(runningMode = running.active) }
+            }
+        }
+
         MediaController
             .Builder(
                 application,
@@ -306,12 +317,23 @@ class MusicViewModel(
         viewModelScope.launch {
 
             val savedMusicState = userPreferences.getSavedMusicState()
+            val skipSpeed = runningMode.shouldSkipSpeedRestore()
 
             mediaController?.run {
+                // Restoring anything over a queue that is already loaded would
+                // throw away live playback: the service outlives this activity,
+                // so reconnecting to a service still playing lands here with a
+                // saved snapshot that is older than what is on the speakers. A
+                // run would not survive the app being reopened.
+                if (mediaItemCount > 0) return@run
+
                 repeatMode = savedMusicState.repeatMode
                 shuffleModeEnabled = savedMusicState.shuffle
-                mediaController!!.playbackParameters =
-                    mediaController!!.playbackParameters.withSpeed(savedMusicState.speed)
+                // A speed a run derived from one track's tempo means nothing for
+                // whatever is restored next, so it is dropped rather than
+                // reapplied.
+                mediaController!!.playbackParameters = mediaController!!.playbackParameters
+                    .withSpeed(if (skipSpeed) 1f else savedMusicState.speed)
                 mediaController!!.playbackParameters =
                     mediaController!!.playbackParameters.withPitch(savedMusicState.pitch)
                 val mediaItems = savedMusicState.loadedMedias.fastMap { it.toMediaItem() }
@@ -343,8 +365,70 @@ class MusicViewModel(
         mediaController!!.release()
     }
 
-    @androidx.annotation.OptIn(UnstableApi::class)
     fun handlePlayerActions(action: PlayerActions) {
+        if (runningMode.state.value.active) {
+            // viewModelScope is Main.immediate, so an action the run does not
+            // care about still reaches the player on this frame rather than the
+            // next one.
+            viewModelScope.launch { handleWhileRunning(action) }
+        } else {
+            handle(action)
+        }
+    }
+
+    /**
+     * Playback actions during a run, which is a mode the player is in rather
+     * than a queue it owns.
+     *
+     * Anything that would hand the player a queue of its own has to be routed
+     * instead of executed. RunningModeManager plans a run and holds it in a
+     * RunPlan whose indices are the player's indices; a setMediaItems from here
+     * replaces the queue underneath that, and the run ends not because the
+     * runner asked it to but because the plan and the player stopped agreeing.
+     *
+     * So a request for a particular track becomes a request to play it *inside*
+     * the run, and a queue edit becomes an edit to the plan and the player
+     * together. What is left are the three deliberate ways out — stop, shuffle
+     * everything, start a playlist — which end the run first and then do exactly
+     * what they would have done anyway.
+     */
+    private suspend fun handleWhileRunning(action: PlayerActions) {
+        when (action) {
+            is PlayerActions.PlayTrack -> runningMode.playNow(action.track.mediaId)
+            is PlayerActions.PlayNext -> runningMode.queueNext(action.cuteTrack.mediaId)
+            is PlayerActions.AddToQueue ->
+                runningMode.appendToQueue(action.cuteTracks.map { it.mediaId })
+
+            is PlayerActions.ReArrangeQueue -> runningMode.moveInQueue(action.from, action.to)
+            is PlayerActions.RemoveFromQueue ->
+                runningMode.removeFromQueue(action.track.mediaId)
+
+            is PlayerActions.PlayFromSource -> {
+                val mediaId = action.mediaId
+                // A source with no track named is shuffle-everything, which is a
+                // different queue by definition and so a way out rather than a
+                // pick within the run.
+                if (mediaId != null) {
+                    runningMode.playNow(mediaId)
+                } else {
+                    runningMode.endRun()
+                    handle(action)
+                }
+            }
+
+            is PlayerActions.PlayRandom,
+            is PlayerActions.StopPlayback,
+            is PlayerActions.StartPlaylist -> {
+                runningMode.endRun()
+                handle(action)
+            }
+
+            else -> handle(action)
+        }
+    }
+
+    @androidx.annotation.OptIn(UnstableApi::class)
+    private fun handle(action: PlayerActions) {
         when (action) {
             is PlayerActions.RestartSong -> mediaController!!.seekTo(0)
             is PlayerActions.PlayRandom -> mediaController!!.playRandom()

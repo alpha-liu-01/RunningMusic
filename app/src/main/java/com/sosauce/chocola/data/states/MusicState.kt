@@ -21,4 +21,15 @@ data class MusicState(
     val loadedMedias: List<CuteTrack> = emptyList(),
     val audioSessionAudio: Int = 0,
     val lyrics: List<Lyrics> = emptyList(),
+    /**
+     * Whether a cadence-matched run is in progress.
+     *
+     * Mirrored here from RunningModeManager so that playback UI far from the run
+     * screen can react to it, chiefly to know that [speed] is no longer a setting
+     * the user chose but a property of the track being played.
+     *
+     * Serialised along with the rest of this state and then ignored on restore: a
+     * run does not survive the process it was planned in.
+     */
+    val runningMode: Boolean = false,
 )

@@ -33,6 +33,7 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
+import com.sosauce.chocola.BuildConfig
 import com.sosauce.chocola.R
 import com.sosauce.chocola.data.states.MusicState
 import com.sosauce.chocola.domain.actions.PlayerActions
@@ -46,6 +47,8 @@ import com.sosauce.chocola.presentation.screens.settings.compenents.SettingsScre
 import com.sosauce.chocola.utils.selfAlignHorizontally
 import com.sosauce.nekobites.animations.AnimatedFab
 import com.sosauce.nekobites.helpers.ObserveAsEvents
+import lol.alphaliu01.runningmusic.analysis.ui.TempoAnalysisScreen
+import lol.alphaliu01.runningmusic.steps.dev.StepRecorderScreen
 import org.koin.androidx.compose.koinViewModel
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
@@ -62,50 +65,67 @@ fun SettingsScreen(
     val resources = LocalResources.current
     val scrollState = rememberScrollState()
     val backstack = rememberNavBackStack(SettingsScreens.Settings)
-    val items = listOf(
-        Item(
+    val items = buildList {
+        add(Item(
             icon = R.drawable.palette,
             name = stringResource(R.string.look_and_feel),
             description = stringResource(R.string.look_and_feel_desc),
             onNavigate = { backstack.navigate(SettingsScreens.LookAndFeel) }
-        ),
-        Item(
+        ))
+        add(Item(
             icon = R.drawable.music_note,
             name = stringResource(R.string.now_playing),
             description = stringResource(R.string.now_playing_desc),
             onNavigate = { backstack.navigate(SettingsScreens.NowPlaying) }
-        ),
-        Item(
+        ))
+        add(Item(
             icon = R.drawable.navigation,
             name = stringResource(R.string.navigation),
             description = stringResource(R.string.navigation_desc),
             onNavigate = { backstack.navigate(SettingsScreens.Navigation) }
-        ),
-        Item(
+        ))
+        add(Item(
             icon = R.drawable.brightness_medium,
             name = stringResource(R.string.aod),
             description = stringResource(R.string.aod_desc),
             onNavigate = { backstack.navigate(SettingsScreens.AlwaysOnDisplay) }
-        ),
-        Item(
+        ))
+        add(Item(
             icon = R.drawable.lyrics_rounded,
             name = stringResource(R.string.lyrics),
             description = stringResource(R.string.lyrics_settings_desc),
             onNavigate = { backstack.navigate(SettingsScreens.Lyrics) }
-        ),
-        Item(
+        ))
+        add(Item(
             icon = R.drawable.headphones,
             name = stringResource(R.string.playback_controls),
             description = stringResource(R.string.playback_controls_desc),
             onNavigate = { backstack.navigate(SettingsScreens.Playback) }
-        ),
-        Item(
+        ))
+        add(Item(
             icon = R.drawable.library,
             name = stringResource(R.string.library),
             description = stringResource(R.string.library_desc),
             onNavigate = { backstack.navigate(SettingsScreens.Library) }
-        )
-    )
+        ))
+        add(Item(
+            icon = R.drawable.speed_rounded,
+            name = stringResource(R.string.tempo_analysis),
+            description = stringResource(R.string.tempo_analysis_desc),
+            onNavigate = { backstack.navigate(SettingsScreens.TempoAnalysis) }
+        ))
+
+        // Debug-only, and unlocalised for that reason: the sensor spike's
+        // control panel is a developer tool, not a user-facing setting.
+        if (BuildConfig.DEBUG) {
+            add(Item(
+                icon = R.drawable.speed_rounded,
+                name = "Step recorder",
+                description = "Sensor spike: record step timestamps to a file",
+                onNavigate = { backstack.navigate(SettingsScreens.StepRecorder) }
+            ))
+        }
+    }
 
     Scaffold(
         bottomBar = {
@@ -284,6 +304,27 @@ fun SettingsScreen(
                     )
                 }
 
+                entry<SettingsScreens.TempoAnalysis> {
+                    Column(
+                        modifier = Modifier
+                            .verticalScroll(scrollState)
+                            .padding(paddingValues)
+                    ) {
+                        TempoAnalysisScreen()
+                    }
+                }
+
+                if (BuildConfig.DEBUG) {
+                    entry<SettingsScreens.StepRecorder> {
+                        Column(
+                            modifier = Modifier
+                                .verticalScroll(scrollState)
+                                .padding(paddingValues)
+                        ) {
+                            StepRecorderScreen()
+                        }
+                    }
+                }
             }
         )
     }

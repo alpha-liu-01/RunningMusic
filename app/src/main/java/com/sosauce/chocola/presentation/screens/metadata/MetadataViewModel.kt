@@ -20,9 +20,9 @@ import com.kyant.taglib.AudioPropertiesReadStyle
 import com.kyant.taglib.Metadata
 import com.kyant.taglib.Picture
 import com.kyant.taglib.TagLib
+import com.sosauce.chocola.utils.mergedWith
 import com.sosauce.chocola.utils.toAudioFileMetadata
 import com.sosauce.chocola.utils.toModifiableMap
-import com.sosauce.chocola.utils.toPropertyMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -111,15 +111,24 @@ class MetadataViewModel(
     }
 
 
+    /**
+     * The file's tags with the edited fields written over them.
+     *
+     * Saving only the edited fields would replace the file's whole tag set with
+     * the eight this screen knows about, silently destroying everything else it
+     * carried. Merging into what was loaded is what stops an edit to the title
+     * from erasing the track's BPM.
+     */
+    private fun editedPropertyMap() =
+        (metadataState.value.metadata?.propertyMap ?: hashMapOf())
+            .mergedWith(metadataState.value.mutablePropertiesMap.toAudioFileMetadata())
+
     private fun saveChangesApi30Plus() {
         try {
             (getFileDescriptorFromPath("w")
                 ?: throw Exception("No file descriptor found!")).use { fd ->
                 fd.dup().detachFd().let {
-                    TagLib.savePropertyMap(it,
-                        metadataState.value.mutablePropertiesMap.toAudioFileMetadata()
-                            .toPropertyMap()
-                    )
+                    TagLib.savePropertyMap(it, editedPropertyMap())
                 }
 
                 fd.dup().detachFd().let {
@@ -141,10 +150,7 @@ class MetadataViewModel(
 
             application.contentResolver.openFileDescriptor(sourceFileUri, "rw", null)?.use { fd ->
                 fd.dup().detachFd().let {
-                    TagLib.savePropertyMap(it,
-                        metadataState.value.mutablePropertiesMap.toAudioFileMetadata()
-                            .toPropertyMap()
-                    )
+                    TagLib.savePropertyMap(it, editedPropertyMap())
                 }
                 fd.dup().detachFd().let {
                     val newPic =

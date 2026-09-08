@@ -14,6 +14,12 @@ captures/
 .cxx/
 *.apk
 output.json
+output-metadata.json
+
+# Editors
+# .vscode/settings.json gets written automatically by the CMake extension once
+# there is native code in the tree, and only records a local path.
+.vscode/
 
 # IntelliJ
 *.iml
@@ -33,3 +39,5 @@ google-services.json
 *.hprof
 .DS_Store
 .kotlin/sessions/kotlin-compiler-9804472835993706459.salive
+
+.cursor/

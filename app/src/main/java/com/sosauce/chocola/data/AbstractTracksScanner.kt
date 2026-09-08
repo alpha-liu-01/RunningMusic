@@ -20,9 +20,16 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import lol.alphaliu01.runningmusic.library.TrackMetadataDao
+import lol.alphaliu01.runningmusic.library.orderedByBpm
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
@@ -32,17 +39,58 @@ class AbstractTracksScanner(
     private val context: Context,
     private val userPreferences: UserPreferences,
     private val ioCoroutineScope: CoroutineScope,
-    private val safManager: SafManager
+    private val safManager: SafManager,
+    // The DAO rather than TrackMetadataRepository, which already depends on
+    // this class. Taking the repository here would be a dependency cycle, and
+    // at runtime a deadlock: it waits on latestTracks, which would be waiting
+    // on it.
+    private val trackMetadataDao: TrackMetadataDao
 ) {
 
     /**
      * Single source of truth to get all filtered tracks
      */
-    val latestTracks = fetchLatestTracks().stateIn(
+    val latestTracks = combine(
+        fetchLatestTracks(),
+        userPreferences.tracksSettings(),
+        bpmForSorting()
+    ) { tracks, tracksSettings, bpmByTrackKey ->
+        // Every other sort is expressed as an ORDER BY on the MediaStore query.
+        // BPM cannot be, because it lives in this app's database, so it is the
+        // one sort that needs a pass over the results.
+        if (tracksSettings.sort == TrackSort.BPM) {
+            tracks.orderedByBpm(bpmByTrackKey, tracksSettings.ascending)
+        } else {
+            tracks
+        }
+    }.flowOn(Dispatchers.Default).stateIn(
         ioCoroutineScope,
         SharingStarted.WhileSubscribed(5000),
         emptyList()
     )
+
+    /**
+     * Known tempos, but only while the user is actually sorting by them.
+     *
+     * Subscribing to the metadata table unconditionally would rebuild the whole
+     * library list every time any tempo is saved, for everyone, including the
+     * majority who never sort this way.
+     */
+    private fun bpmForSorting(): Flow<Map<String, Float>> =
+        userPreferences.tracksSettings()
+            .map { it.sort == TrackSort.BPM }
+            .distinctUntilChanged()
+            .flatMapLatest { sortingByBpm ->
+                if (!sortingByBpm) {
+                    flowOf(emptyMap())
+                } else {
+                    trackMetadataDao.observeAll().map { rows ->
+                        rows.mapNotNull { row ->
+                            row.bpm?.let { row.trackKey to it }
+                        }.toMap()
+                    }
+                }
+            }
 
     private fun fetchLatestTracks(): Flow<List<CuteTrack>> {
         val mediaStoreFlow =
@@ -98,7 +146,9 @@ class AbstractTracksScanner(
             MediaStore.Audio.Media.ARTIST,
             MediaStore.Audio.Media.ALBUM,
             MediaStore.Audio.Media.DATA,
-            MediaStore.Audio.Media.TRACK
+            MediaStore.Audio.Media.TRACK,
+            MediaStore.Audio.Media.SIZE,
+            MediaStore.Audio.Media.DURATION
         )
 
 
@@ -115,6 +165,8 @@ class AbstractTracksScanner(
             val albumColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
             val folderColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
             val trackNbColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TRACK)
+            val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
+            val durationColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
 
             while (cursor.moveToNext()) {
 
@@ -126,6 +178,8 @@ class AbstractTracksScanner(
                 val filePath = cursor.getString(folderColumn)
                 val folder = filePath.substringBeforeLast('/')
                 val trackNumber = cursor.getInt(trackNbColumn)
+                val sizeBytes = cursor.getLong(sizeColumn)
+                val durationMs = cursor.getLong(durationColumn)
                 val uri = ContentUris.withAppendedId(
                     MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                     id
@@ -144,7 +198,10 @@ class AbstractTracksScanner(
                         trackNumber = trackNumber,
                         folder = folder,
                         path = filePath,
-                        isSaf = false
+                        isSaf = false,
+                        sizeBytes = sizeBytes,
+                        fileName = filePath.substringAfterLast('/'),
+                        durationMs = durationMs
                     )
                 )
             }
@@ -153,14 +210,25 @@ class AbstractTracksScanner(
         return musics
     }
 
-    private fun tracksSettingsToMediaStore(tracksSettings: TracksSettings): String {
+    /** Null asks for MediaStore's default order rather than for no order. */
+    private fun tracksSettingsToMediaStore(tracksSettings: TracksSettings): String? {
         val data = when (tracksSettings.sort) {
             TrackSort.TITLE -> MediaStore.Audio.Media.TITLE
             TrackSort.ALBUM -> MediaStore.Audio.Media.ALBUM
             TrackSort.ARTIST -> MediaStore.Audio.Media.ARTIST
             TrackSort.YEAR -> MediaStore.Audio.Media.YEAR
             TrackSort.DATE_MODIFIED -> MediaStore.Audio.Media.DATE_MODIFIED
-            TrackSort.AS_ADDED -> ""
+
+            // No MediaStore column expresses this, and none could: playlists
+            // hold their tracks in a Set, which has no order to reproduce.
+            // Previously this fell through to an empty column name and built
+            // the clause " COLLATE NOCASE ASC", which orders by nothing.
+            TrackSort.AS_ADDED -> return null
+
+            // Reordered in memory afterwards. Asking for titles here rather
+            // than nothing gives tracks that share a tempo a sensible order,
+            // because the sort that follows is stable.
+            TrackSort.BPM -> return "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC"
         }
 
         val noCase = when (tracksSettings.sort) {

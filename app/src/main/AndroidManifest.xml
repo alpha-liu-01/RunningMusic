@@ -12,6 +12,49 @@
         android:maxSdkVersion="28" /> <!--Android 9-->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!--
+      Tempo analysis runs as a foreground worker so a library-wide pass the user
+      asked for survives the app being backgrounded. dataSync is the type
+      WorkManager uses, and from API 34 it needs its own permission.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!--
+      Running mode drives its target cadence from the step detector. A runtime
+      permission from API 29; minSdk is 28, and below 29 the detector needs no
+      permission at all, which Context.hasStepPermission() handles.
+
+      Notably absent: FOREGROUND_SERVICE_HEALTH. The sensor spike established
+      that the wakeup step detector keeps delivering under the mediaPlayback
+      foreground service PlaybackService already runs, through 61% CPU suspend,
+      so a second service type would be a permission asked for and not needed.
+      It stays in the debug manifest, where the experiment that ruled it out is.
+
+      Also absent: WAKE_LOCK, which was here briefly. A OnePlus PKX110 has no
+      wakeup variant of either step sensor, and holding the CPU up for the length
+      of a run is one way to keep hearing them. It is a battery bill paid to work
+      around a problem that turned out not to exist: the step counter is
+      cumulative and its pedometer runs on the always-on sensor hub, so suspend
+      delays the number and never loses it. What actually needed fixing was the
+      loop, which judged silence on a clock that runs through suspend and so
+      could not tell a sleeping phone from a stopped runner. See CadenceLoop.
+
+      Removing it is hygiene rather than a saving, and the measurement says so:
+      a screen-locked walk suspended for 0% of its length, because audioserver
+      and ExoPlayer each hold one of their own while a track is playing. Nothing
+      an app that plays music can avoid, or should want to.
+
+      It will still show up in `aapt2 dump permissions` regardless, since
+      WorkManager and media3-exoplayer both declare it and the merger unions them
+      in. Not declaring it is a statement about this app's code, not about the
+      APK's permission list.
+    -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+
+    <!-- Required=false: the app is a music player first, and works without one. -->
+    <uses-feature
+        android:name="android.hardware.sensor.stepdetector"
+        android:required="false" />
     <uses-permission
         android:name="android.permission.ACCESS_NETWORK_STATE"
         tools:node="remove" />
@@ -43,6 +86,18 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+
+
+        <!--
+            WorkManager declares this service itself, but not its foreground
+            type. From API 34 startForeground() refuses a type that the manifest
+            never declared, so the analysis job would crash the first time it
+            promoted itself. Merging the attribute in is the documented fix.
+        -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
 
         <activity

@@ -51,6 +51,7 @@ import com.sosauce.chocola.presentation.screens.metadata.MetadataEditorScreen
 import com.sosauce.chocola.presentation.screens.metadata.MetadataEvents
 import com.sosauce.chocola.presentation.screens.metadata.MetadataViewModel
 import com.sosauce.chocola.presentation.screens.playing.QueueScreen
+import lol.alphaliu01.runningmusic.running.ui.RunningScreen
 import com.sosauce.chocola.presentation.screens.playlists.PlaylistDetailsScreen
 import com.sosauce.chocola.presentation.screens.playlists.PlaylistDetailsViewModel
 import com.sosauce.chocola.presentation.screens.playlists.PlaylistViewModel
@@ -284,6 +285,10 @@ fun Nav(
                             onNavigateBack = backStack::navigateBack,
                             onHandlePlayerAction = musicViewModel::handlePlayerActions
                         )
+                    }
+
+                    entry<Screen.Running> {
+                        RunningScreen(onNavigateBack = backStack::navigateBack)
                     }
 
                     entry<Screen.Lyrics> {

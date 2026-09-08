@@ -4,6 +4,7 @@ package com.sosauce.chocola.data.repositories
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.core.net.toUri
 import com.kyant.taglib.TagLib
 import com.sosauce.chocola.data.datastore.UserPreferences
@@ -40,6 +41,7 @@ class SafManager(
             val artUri =
                 TagLib.getFrontCover(fd.dup().detachFd())?.data?.getUriFromByteArray(context)
                     ?: Uri.EMPTY
+            val durationMs = TagLib.getAudioProperties(fd.dup().detachFd())?.length?.toLong() ?: 0L
 
             CuteTrack(
                 mediaId = uri.hashCode().toString(),
@@ -50,9 +52,35 @@ class SafManager(
                 album = album,
                 folder = "-",
                 path = uri.path ?: "Unknown path",
-                isSaf = true
+                isSaf = true,
+                sizeBytes = fd.statSize,
+                fileName = displayName(uri),
+                durationMs = durationMs
             )
         } ?: throw IllegalArgumentException("Unable to open file descriptor for uri")
+    }
+
+    /**
+     * A SAF uri's path is a document id, not a file path, so the last segment
+     * can be something like "primary:Music/song.mp3". OpenableColumns gives the
+     * real file name, which is what the durable track key is built from.
+     */
+    private fun displayName(uri: Uri): String {
+        context.contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            val nameColumn = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+
+            if (nameColumn != -1 && cursor.moveToFirst()) {
+                cursor.getString(nameColumn)?.let { return it }
+            }
+        }
+
+        return uri.path?.substringAfterLast('/').orEmpty()
     }
 
 }

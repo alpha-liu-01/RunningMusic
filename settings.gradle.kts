@@ -20,5 +20,7 @@ dependencyResolutionManagement {
 }
 
 
-rootProject.name = "Chocola"
+rootProject.name = "RunningMusic"
 include(":app")
+include(":cadence")
+include(":aubio")

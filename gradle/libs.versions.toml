@@ -39,6 +39,10 @@ material3 = "1.5.0-alpha27"
 nav3Core = "1.1.7"
 lifecycleViewmodelNav3 = "2.11.0"
 foundation = "1.12.0"
+junit = "6.1.3"
+androidxTestExtJunit = "1.3.0"
+androidxTestRunner = "1.7.0"
+work = "2.11.2"
 
 
 
@@ -82,11 +86,19 @@ sweetselect-compose = { module = "io.github.sosauce:sweetselect-compose", versio
 taglib = { module = "io.github.kyant0:taglib", version.ref = "taglib" }
 androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "roomCompiler" }
 androidx-room-ktx = { module = "androidx.room:room-ktx", version.ref = "roomKtx" }
+androidx-room-testing = { module = "androidx.room:room-testing", version.ref = "roomKtx" }
+androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestExtJunit" }
+androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
 kmpalette-core = { module = "com.kmpalette:kmpalette-core", version.ref = "kmpalette" }
 androidx-navigation3-runtime = { module = "androidx.navigation3:navigation3-runtime", version.ref = "nav3Core" }
 androidx-navigation3-ui = { module = "androidx.navigation3:navigation3-ui", version.ref = "nav3Core" }
 androidx-lifecycle-viewmodel-navigation3 = { module = "androidx.lifecycle:lifecycle-viewmodel-navigation3", version.ref = "lifecycleViewmodelNav3" }
 androidx-compose-foundation = { group = "androidx.compose.foundation", name = "foundation", version.ref = "foundation" }
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 
 
 
@@ -94,6 +106,8 @@ androidx-compose-foundation = { group = "androidx.compose.foundation", name = "f
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }
+androidLibrary = { id = "com.android.library", version.ref = "agp" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "serialization"}
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+kotlinJvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

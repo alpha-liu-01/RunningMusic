@@ -2,48 +2,74 @@ name: Release Stable CI
 
 on: workflow_dispatch
 
+permissions:
+  contents: write
+
 jobs:
   build:
-
     runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: ${{ runner.temp }}/android-sdk
+      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
     outputs:
       versionName: ${{ steps.versionname.outputs.versionName }}
 
     steps:
     - uses: actions/checkout@v4
-    - name: set up JDK 17
+
+    - name: Set up JDK 21
       uses: actions/setup-java@v4
       with:
-        java-version: '17'
+        java-version: '21'
         distribution: 'temurin'
         cache: 'gradle'
+
+    - name: Cache Android SDK
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.ANDROID_HOME }}
+        key: android-sdk-${{ hashFiles('scripts/setup-android-sdk.sh') }}
+
+    - name: Install Android SDK, NDK and CMake
+      run: |
+        chmod +x gradlew scripts/*.sh
+        scripts/setup-android-sdk.sh
+        echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+        echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+        echo "$ANDROID_HOME/build-tools/37.0.0" >> "$GITHUB_PATH"
 
     - name: Get versionName
       id: versionname
       run: echo "versionName=$(grep 'versionName' app/build.gradle.kts | head -1 | awk -F\" '{ print $2 }')" >> $GITHUB_OUTPUT
 
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
-
     - name: Decode Keystore
-      id: decode_keystore
       uses: timheuer/base64-to-file@v1
       with:
         fileName: 'release_key.jks'
         fileDir: 'app/'
         encodedString: ${{ secrets.SIGNING_KEY }}
-      
 
     - name: Build Release APK
-      run: ./gradlew assembleRelease
-      env: 
+      run: ./gradlew :cadence:test assembleRelease --stacktrace
+      env:
         SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         SIGNING_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+
+    - name: Verify native libraries are 16 KB aligned
+      run: scripts/check-so-alignment.sh app/build/outputs/apk/release/*.apk
+
+    - name: Verify the APK is signed
+      run: apksigner verify --print-certs app/build/outputs/apk/release/*.apk
+
+    - name: Remove the keystore
+      if: always()
+      run: rm -f app/release_key.jks
+
     - uses: actions/upload-artifact@v4
       with:
-        name: CuteMusic Release
-        path: app/build/**/*.apk
+        name: RunningMusic Release
+        path: app/build/outputs/apk/release/*.apk
 
   release:
     needs: [build]
@@ -51,16 +77,14 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: CuteMusic Release
+          name: RunningMusic Release
       - name: Create Release
-        id: create_release
         uses: softprops/action-gh-release@v2
         with:
-          name: Vesion ${{ needs.build.outputs.versionName }}
+          name: Version ${{ needs.build.outputs.versionName }}
           prerelease: false
           tag_name: v${{ needs.build.outputs.versionName }}
           files: |
-            ./**/*.apk
+            ./*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      

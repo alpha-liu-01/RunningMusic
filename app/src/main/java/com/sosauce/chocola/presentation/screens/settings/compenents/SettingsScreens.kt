@@ -29,4 +29,11 @@ sealed class SettingsScreens : NavKey {
 
     @Serializable
     data object AlwaysOnDisplay : SettingsScreens()
+
+    @Serializable
+    data object TempoAnalysis : SettingsScreens()
+
+    /** Debug-only; only reachable when `BuildConfig.DEBUG`. */
+    @Serializable
+    data object StepRecorder : SettingsScreens()
 }

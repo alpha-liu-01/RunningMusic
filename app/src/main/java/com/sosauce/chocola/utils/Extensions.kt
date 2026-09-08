@@ -142,7 +142,6 @@ fun PropertyMap.toModifiableMap(separator: String = ", "): MutableMap<String, St
         "DATE" to this["DATE"]?.getOrNull(0),
         "GENRE" to this["GENRE"]?.joinToString(separator),
         "LYRICS" to this["LYRICS"]?.getOrNull(0),
-        "DATE" to this["DATE"]?.getOrNull(0),
     )
 }
 
@@ -186,6 +185,31 @@ fun AudioFileMetadata.toPropertyMap(): PropertyMap {
         "GENRE" to genre.formatForField(),
         "LYRICS" to arrayOf(lyrics ?: "")
     )
+}
+
+/**
+ * The file's own tags with the eight editable ones replaced by [edits].
+ *
+ * Saving [toPropertyMap] on its own replaces the file's whole tag set with those
+ * eight keys, so every other tag the file carried -- BPM, COMMENT, COMPOSER,
+ * ALBUMARTIST, ReplayGain, MusicBrainz ids -- is erased by any edit, including
+ * an edit that touched none of them. Starting from what was read and writing
+ * over it keeps them.
+ *
+ * A key whose edited value is empty is removed rather than written as an empty
+ * string, since an empty tag and an absent one are the same intent and only one
+ * of them is tidy.
+ */
+fun PropertyMap.mergedWith(edits: AudioFileMetadata): PropertyMap {
+    val merged = HashMap(this)
+
+    edits.toPropertyMap().forEach { (key, values) ->
+        val kept = values.filter { it.isNotBlank() }
+
+        if (kept.isEmpty()) merged.remove(key) else merged[key] = kept.toTypedArray()
+    }
+
+    return merged
 }
 
 inline fun <E> List<E>.copyMutate(block: MutableList<E>.() -> Unit): List<E> {
