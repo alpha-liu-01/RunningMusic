@@ -1,6 +1,8 @@
 package lol.alphaliu01.runningmusic.cadence.cli
 
+import lol.alphaliu01.runningmusic.cadence.steps.AwakeClock
 import lol.alphaliu01.runningmusic.cadence.steps.CadenceLoop
+import lol.alphaliu01.runningmusic.cadence.steps.awakeClock
 import lol.alphaliu01.runningmusic.cadence.steps.countedSteps
 import lol.alphaliu01.runningmusic.cadence.steps.LoopConfig
 import lol.alphaliu01.runningmusic.cadence.steps.Motion
@@ -38,6 +40,13 @@ fun main(args: Array<String>) {
     val tickNs = (args.option("--tick")?.toDoubleOrNull() ?: 5.0).toNanos()
     val verbose = args.contains("--verbose")
 
+    // Throws away the recorded uptime and pretends the CPU was up throughout,
+    // which is what the loop assumed before it took an awake clock. Worth having
+    // as a flag rather than as a git stash: on a recording made with the screen
+    // off it is the difference between a run and a runner who keeps stopping,
+    // and that is easier to believe having seen both printed from the same file.
+    val ignoreSuspend = args.contains("--ignore-suspend")
+
     // The thresholds worth arguing about, sweepable without a rebuild. Whether a
     // cadence counts as locomotion is the whole question for a walk.
     val defaults = LoopConfig()
@@ -60,7 +69,7 @@ fun main(args: Array<String>) {
         println(
             "usage: cadenceReplay <file-or-dir>... " +
                 "[--mode continuous|lock|manual] [--target 170] [--tick 5] " +
-                "[--low 60] [--high 200] [--floor <spm>] [--verbose]"
+                "[--low 60] [--high 200] [--floor <spm>] [--ignore-suspend] [--verbose]"
         )
         return
     }
@@ -83,7 +92,21 @@ fun main(args: Array<String>) {
                 val source =
                     if (counted.isEmpty()) StepSource.TIMED else StepSource.COUNTED
                 println("  source: ${source.name.lowercase()} (${samples.size} steps)")
-                replayOne(samples, mode, target, tickNs, verbose, config.copy(source = source))
+                // Always taken from the detector stream, whichever source is
+                // being replayed. When the CPU slept is a fact about the phone
+                // over the run, not about the sensor being read.
+                val awake =
+                    if (ignoreSuspend) AwakeClock.Always else recording.steps.awakeClock()
+                if (ignoreSuspend) println("  suspend: ignored, pretending the CPU stayed up")
+                replayOne(
+                    samples,
+                    awake,
+                    mode,
+                    target,
+                    tickNs,
+                    verbose,
+                    config.copy(source = source),
+                )
             }
             .onFailure { println("  unreadable: ${it.message}") }
         println()
@@ -92,6 +115,7 @@ fun main(args: Array<String>) {
 
 private fun replayOne(
     samples: List<lol.alphaliu01.runningmusic.cadence.steps.StepSample>,
+    awake: AwakeClock,
     mode: TrackingMode,
     target: Int,
     tickNs: Long,
@@ -107,7 +131,10 @@ private fun replayOne(
     var lastPrintedNs = Long.MIN_VALUE
 
     val settled = CadenceLoop(target = target, mode = mode, config = config)
-        .replay(samples, tickNs = tickNs) { nowNs, loop ->
+        // Replayed against the uptime the recording captured, so a device that
+        // suspended reads here as one that suspended rather than as one whose
+        // runner kept stopping.
+        .replay(samples, tickNs = tickNs, awake = awake) { nowNs, loop ->
             val changed = previous == null ||
                 loop.motion != previous!!.motion ||
                 loop.target != previous!!.target ||

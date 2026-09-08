@@ -34,6 +34,26 @@ fun bursty(periodNs: Long = SECOND_NS, lagNs: Long = SECOND_NS) = Delivery { sen
 }
 
 /**
+ * A CPU that wakes for [awakeNs] out of every [cycleNs] and is suspended for the
+ * rest, which is roughly what a phone in a pocket with the screen off does.
+ *
+ * The awake clock it returns is the wall clock minus everything slept through,
+ * so a caller of [CadenceLoop.advance] that passes both sees the same divergence
+ * a real device would. Phase is measured from [originNs], which wants to be the
+ * start of the stream: a run that begins mid-cycle is a detail no test needs.
+ */
+fun sleepingCpu(
+    awakeNs: Long,
+    cycleNs: Long,
+    originNs: Long = 4_000 * SECOND_NS,
+) = AwakeClock { nowNs ->
+    val since = nowNs - originNs
+    val cycles = Math.floorDiv(since, cycleNs)
+    val into = Math.floorMod(since, cycleNs)
+    originNs + cycles * awakeNs + minOf(into, awakeNs)
+}
+
+/**
  * Builds a gait out of segments.
  *
  * Timestamps start well away from zero so that nothing can accidentally pass by

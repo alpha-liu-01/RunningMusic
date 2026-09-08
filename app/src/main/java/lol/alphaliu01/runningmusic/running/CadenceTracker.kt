@@ -54,6 +54,22 @@ private const val TAG = "CadenceTracker"
  */
 private const val TICK_MS = 5_000L
 
+/**
+ * How long the sensor may hold events in its FIFO before handing them over.
+ *
+ * Zero, which is what this used to ask for, means interrupt us on every event.
+ * On a phone whose detector fires once a second that is a wakeup a second, and
+ * the loop has no use for any of them: it acts on a [TICK_MS] tick over a
+ * forty-five second window, so a step is worth exactly as much delivered five
+ * seconds late. Batching to the tick lets the CPU sleep in between, which is the
+ * point on hardware where the step sensors have no wakeup variant and staying
+ * awake was the only way we had of hearing them.
+ *
+ * Kept below [LoopConfig.stallNs] on purpose. Held longer than the loop's
+ * patience, batched delivery would itself read as a stalled runner.
+ */
+private val BATCH_LATENCY_US = (TICK_MS * 1_000).toInt()
+
 /** Why the tracker is not driving the target, when it is not. */
 enum class CadenceUnavailable {
     /** No step detector of either variant. Most emulators, some cheap phones. */
@@ -192,7 +208,7 @@ class CadenceTracker(
         val registered = stepSensors.register(
             listener = this,
             sensor = sensor,
-            batchLatencyUs = 0,
+            batchLatencyUs = BATCH_LATENCY_US,
             handler = Handler(thread.looper),
         )
 
@@ -211,7 +227,7 @@ class CadenceTracker(
         val countingNow = counter != null && stepSensors.register(
             listener = this,
             sensor = counter,
-            batchLatencyUs = 0,
+            batchLatencyUs = BATCH_LATENCY_US,
             handler = Handler(thread.looper),
         )
 
@@ -283,7 +299,15 @@ class CadenceTracker(
             }
 
             val previous = loop
-            loop = loop.advance(SystemClock.elapsedRealtimeNanos(), steps)
+            // Both clocks, because the gap between them is the only evidence
+            // that a silence was the CPU sleeping rather than the runner
+            // stopping. On a phone whose step sensors have no wakeup variant
+            // those two look identical on the wall clock alone.
+            loop = loop.advance(
+                nowNs = SystemClock.elapsedRealtimeNanos(),
+                steps = steps,
+                awakeNs = uptimeNanos(),
+            )
 
             _state.update {
                 it.copy(
@@ -380,7 +404,7 @@ class CadenceTracker(
                     isWakeUp = sensor.isWakeUpSensor,
                     fifoMaxEvents = sensor.fifoMaxEventCount,
                     fgsType = "mediaPlayback",
-                    batchLatencyUs = 0,
+                    batchLatencyUs = BATCH_LATENCY_US,
                     startWallClockMs = System.currentTimeMillis(),
                     startElapsedRealtimeNs = SystemClock.elapsedRealtimeNanos(),
                 )

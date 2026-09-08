@@ -71,7 +71,9 @@ class StepSensors(context: Context) {
 
     /**
      * @param batchLatencyUs how long the sensor may hold events in its FIFO
-     * before waking us. Zero means deliver immediately.
+     * before waking us. Zero means deliver immediately, which is also the most
+     * expensive thing to ask for: it is an interrupt per event whether or not
+     * the caller has any use for one that soon.
      *
      * The sampling period is [SensorManager.SENSOR_DELAY_FASTEST] but is ignored
      * for the step detector, which is a special-trigger sensor: it reports when a

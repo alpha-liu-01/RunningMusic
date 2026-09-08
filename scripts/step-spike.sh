@@ -120,8 +120,13 @@ cmd_summary() {
 }
 
 cmd_replay() {
-  local dest="${1:-$DEST}" mode="${2:-continuous}"
-  ./gradlew -q :cadence:cadenceReplay --args="$dest --mode $mode"
+  local dest="${1:-$DEST}"; shift || true
+  # A bare second argument is still the mode, as it always was. Anything starting
+  # with -- belongs to cadenceReplay and is handed straight through, so its own
+  # flags do not have to be mirrored here one at a time.
+  local mode="continuous"
+  if [[ -n "${1:-}" && "${1:-}" != --* ]]; then mode="$1"; shift; fi
+  ./gradlew -q :cadence:cadenceReplay --args="$dest --mode $mode $*"
 }
 
 cmd_status() {

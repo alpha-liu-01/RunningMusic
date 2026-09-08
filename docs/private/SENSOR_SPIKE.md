@@ -7,7 +7,9 @@ answer is no, the whole cadence-matching idea needs a different foundation, and
 better to learn that from a five-minute walk than from a rewrite.
 
 Everything here is one device. Findings should be re-taken on any second device
-before being treated as general.
+before being treated as general — and when a second device finally arrived, two
+of them did not survive it. See
+[The second device](#the-second-device-oneplus-pkx110).
 
 **Verdict: yes.** On the wakeup step detector, behind a `mediaPlayback`
 foreground service, holding no wakelock, a five-minute untethered run at 177 spm
@@ -338,6 +340,132 @@ and no value has to be reserved as a sentinel.
 four times the median stride. It reports those gaps rather than judging them,
 because only the person who did the walking knows whether a 20-second gap was
 lost data or a wait at a crossing.
+
+## The second device: OnePlus PKX110
+
+Everything above was measured on hardware that turned out to be the easy case.
+The second device breaks two of the spike's conclusions, and both breakages have
+since been designed around rather than worked around.
+
+| | |
+|---|---|
+| Model | OnePlus PKX110 |
+| Android | 16 |
+
+### There is no wakeup variant to require
+
+The spike's single most important finding — "the wakeup variant is required, and
+the API makes it easy to get wrong" — assumes there is one to ask for.
+`dumpsys sensorservice` says otherwise:
+
+```
+0x020000b5) pedometer Oplus Step_detect Sensor Non-wakeup | step_detector(18) | non-wakeUp | FIFO (10000, 300)
+0x020000bf) pedometer  Non-wakeup                        | step_counter(19)  | non-wakeUp | FIFO (10000, 300)
+```
+
+Both step sensors are non-wakeup, so neither can rouse the application processor,
+and `getDefaultSensor(type, true)` returns null however carefully it is called.
+Screen off, this phone hears nothing until something else wakes it.
+
+That is not fixable and does not need to be. It stopped mattering once cadence
+was derived from `TYPE_STEP_COUNTER`, which is cumulative and runs on the
+always-on sensor hub: suspend delays the number and never loses it, and
+`stepTimestampsFrom` spreads a delta back across the gap it accumulated over. A
+burst arriving after a thirty-second sleep measures that sleep correctly.
+
+What did need fixing was
+[CadenceLoop](../../cadence/src/main/kotlin/lol/alphaliu01/runningmusic/cadence/steps/CadenceLoop.kt),
+which judged silence on `elapsedRealtime` and so could not tell a sleeping phone
+from a runner standing at a crossing — both are a gap of the same length. It now
+takes the awake clock as a third argument and measures silence on that. The two
+diverge by exactly the time spent suspended, which this document had already
+established as the way to measure sleep; the loop simply was not reading it yet.
+
+A wake lock was tried first, and removed. Holding the CPU up for the length of a
+run does work, and it is a battery bill paid to avoid understanding the problem.
+
+### The wake lock was never ours to remove
+
+The verification walk measured **0% suspend across 5.8 minutes** with the screen
+locked, which is not what removing `setWakeMode(C.WAKE_MODE_LOCAL)` was supposed
+to produce. Two wake locks were held for the length of it, and `dumpsys power`
+shows both released the instant playback is paused:
+
+```
+PARTIAL_WAKE_LOCK 'AudioMix'                   uid=1041  ws=WorkChain{(10403), (1041)}
+PARTIAL_WAKE_LOCK 'ExoPlayer:WakeLockManager'  uid=10403
+```
+
+Neither is ours. `AudioMix` belongs to audioserver and is inherent to mixing
+audio — a device playing music is a device doing work. And `ExoPlayer.Builder`
+now **defaults** `C.WakeMode` to `WAKE_MODE_LOCAL`, so the call that was removed
+was setting the default it already had. Removing it was hygiene and changed
+nothing observable, which is worth writing down because the opposite was assumed.
+
+So the conclusion is sharper than "the wake lock is unnecessary": **while music
+is playing this phone cannot suspend, and that is neither our doing nor worth
+undoing.** Opting out with `WAKE_MODE_NONE` would risk audio dropouts to save
+nothing, since `AudioMix` would still be held.
+
+Which leaves one state where suspend is genuinely reachable and tracking is
+genuinely still running: playback paused mid-run. `CadenceTracker` stops only on
+`endRun` or on a hand touching the slider, not on a pause, so a runner who pauses
+the music keeps a live cadence loop on a phone that is now free to sleep.
+
+### The paused walk, and what it settled
+
+Four minutes, screen locked, playback paused, still tracking. The process is not
+frozen and the sensors keep delivering: **42% suspend, 100 s of 238 s**, against
+0% with music playing. The counter read 107.7 spm, against 108.3 spm on the
+playing walk over the same route — the measurement does not care whether the CPU
+slept, which is the property the whole counter design was chosen for.
+
+The loop held `MOVING` throughout and locked at 115 spm. But so does the same
+recording replayed with `--ignore-suspend`, which throws the uptime away and
+pretends the CPU stayed up. **Identical timelines, to the second.**
+
+The reason is in the shape of the sleep rather than its total. 145 intervals
+contained measurable suspend and the longest single one was **1.45 s**; the
+longest silence between deliveries was 4.94 s. Nothing came close to the 8 s
+stall threshold, so both clocks reach the same verdict. This device naps; it does
+not hibernate — exactly as [How the sleep was distributed](#how-the-sleep-was-distributed)
+found on the Xiaomi, where 255 intervals slept and the longest was 1655 ms.
+
+So the honest conclusion is narrower than the fix looked when it was written:
+
+- **What actually cured the reported bug** was reading cadence from the counter
+  instead of the detector's fixed 60 spm tick, and dropping the movement floor
+  from 140 spm to 60.
+- **The awake clock cured nothing observable on this hardware.** It is correct,
+  it costs one defaulted parameter, and it is what the loop should have been
+  doing all along — but it is insurance against a sleep longer than any of these
+  two devices takes, not the explanation for anything that was going wrong.
+
+Worth keeping for that reason and no stronger one. A phone that does hibernate
+in a pocket would break the old code silently, and the tests now pin the
+behaviour either way.
+
+### The detector fires on a tick, not on steps
+
+More serious, because it is silent. This device's step detector emits events on a
+fixed 994.3 ms hardware period regardless of pace, so the gap between two events
+measures the tick and every cadence in the world comes out as 60.3 spm. It is
+recorded as `run5-oplus-detector-ticks.txt` and it is why the counter, not the
+detector, is now the measurement.
+
+The general lesson is the one this document keeps arriving at from different
+directions: **a step detector's event timing describes the detector, not the
+runner.** Only a count over a known interval is safe from that, which is exactly
+the argument the suspend measurement made for `receivedUptimeNs`.
+
+### Batching, in the end
+
+The spike deferred batching as a battery question and predicted that a *short*
+batch, five or ten seconds, was the experiment worth running. That is what
+shipped: both sensors register at five seconds, matching the loop's tick and
+sitting comfortably inside its eight-second stall threshold. `batchLatencyUs = 0`
+buys nothing a loop working over a forty-five-second window can use, and on this
+device it was asking for a wakeup a second from a sensor that cannot provide one.
 
 ## The `run-as` limitation
 

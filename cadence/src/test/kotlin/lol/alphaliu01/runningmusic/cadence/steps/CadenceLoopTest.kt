@@ -23,9 +23,12 @@ private fun loop(
 private fun CadenceLoop.timeline(
     samples: List<StepSample>,
     endNs: Long? = null,
+    awake: AwakeClock = AwakeClock.Always,
 ): List<Frame> {
     val frames = mutableListOf<Frame>()
-    replay(samples, endNs = endNs) { nowNs, state -> frames += Frame(nowNs, state) }
+    replay(samples, endNs = endNs, awake = awake) { nowNs, state ->
+        frames += Frame(nowNs, state)
+    }
     return frames
 }
 
@@ -376,6 +379,123 @@ class CadenceLoopTest {
         assertEquals(Motion.SENSOR_LOST, settled.motion)
         assertEquals(SLIDER, settled.target)
         assertFalse(settled.locked)
+    }
+
+    // A sleeping CPU.
+    //
+    // The OnePlus case. Neither of its step sensors has a wakeup variant, so
+    // with the screen off the phone suspends and the loop hears nothing until
+    // something else wakes it. Nothing is lost while it sleeps — the counter is
+    // cumulative and its pedometer is always on — so the only question is
+    // whether the loop can tell a sleeping phone from a stopped runner.
+    //
+    // The loop's own timer cannot help it: it is an ordinary delay, so it is
+    // spent in awake time and fires on the far side of a suspend rather than
+    // during one. Both scenarios below are built on that, which is why replay
+    // ticks on the awake clock too.
+
+    /**
+     * A phone up for two seconds in every ten. The runner never stops, but every
+     * wakeup lands well after the last one on the wall clock, and the gap is
+     * wider than the stall threshold.
+     *
+     * This is the shape of the bug: silence judged on a clock that runs through
+     * suspend reads every one of those gaps as a runner standing still.
+     */
+    @Test
+    fun `a wakeup that hears nothing is not a stop`() {
+        val gait = StepStream().steady(175.0, seconds = 180)
+        val dozing = sleepingCpu(awakeNs = 2 * SECOND_NS, cycleNs = 10 * SECOND_NS)
+
+        val frames = loop(TrackingMode.CONTINUOUS).timeline(
+            gait.samples(bursty(periodNs = 30 * SECOND_NS, lagNs = 0)),
+            endNs = gait.endNs,
+            awake = dozing,
+        )
+        val settled = frames.last().loop
+
+        assertTrue(
+            frames.none { it.loop.motion == Motion.STOPPED },
+            "a sleeping CPU was mistaken for a stopped runner",
+        )
+        assertTrue(settled.locked, "three minutes of running should have locked")
+        assertEquals(175.0, assertNotNull(settled.measuredSpm), absoluteTolerance = 3.0)
+    }
+
+    /**
+     * The same run, told the CPU was up the whole time. It reads as a runner who
+     * stops every half minute and never holds a pace long enough to measure,
+     * which is what the loop used to conclude and why a wake lock looked like
+     * the answer.
+     *
+     * Here to keep the test above honest: without it, that one would pass just
+     * as well on a gait no version of the loop ever had trouble with.
+     */
+    @Test
+    fun `the same run reads as stopping if the CPU is assumed awake`() {
+        val gait = StepStream().steady(175.0, seconds = 180)
+
+        val frames = loop(TrackingMode.CONTINUOUS).timeline(
+            gait.samples(bursty(periodNs = 30 * SECOND_NS, lagNs = 0)),
+            endNs = gait.endNs,
+        )
+
+        assertTrue(
+            frames.any { it.loop.motion == Motion.STOPPED },
+            "the awake clock is not what the test above is measuring",
+        )
+        assertFalse(frames.last().loop.locked, "as above")
+    }
+
+    /**
+     * A phone asleep so deeply that the only thing waking it is the delivery
+     * itself: half a minute of running arrives at once, four or five times over.
+     *
+     * The measurement has to be satisfied out of those, and it can be, because a
+     * batch spanning half a minute is a cumulative counter's word that half a
+     * minute of running happened. Crediting each wakeup only the stall threshold
+     * instead — on the older reasoning that a suspended CPU cannot vouch for
+     * what the runner was doing — leaves this run still measuring at the end of
+     * it, having thrown away three quarters of the evidence.
+     */
+    @Test
+    fun `a phone that wakes only to be handed steps still reaches a lock`() {
+        val gait = StepStream().steady(175.0, seconds = 150)
+        val asleep = sleepingCpu(awakeNs = 2 * SECOND_NS, cycleNs = 30 * SECOND_NS)
+
+        val frames = loop(TrackingMode.CONTINUOUS).timeline(
+            gait.samples(bursty(periodNs = 30 * SECOND_NS, lagNs = 0)),
+            endNs = gait.endNs,
+            awake = asleep,
+        )
+        val locked = frames.first { it.loop.locked }
+
+        assertEquals(175.0, assertNotNull(locked.loop.measuredSpm), absoluteTolerance = 3.0)
+        assertTrue(
+            frames.none { it.loop.motion == Motion.STOPPED },
+            "a sleeping CPU was mistaken for a stopped runner",
+        )
+    }
+
+    /**
+     * And the case the awake clock must not paper over: a runner who genuinely
+     * stops while the phone is wide awake is still stopped, on time.
+     */
+    @Test
+    fun `a stop with the CPU awake is still noticed within the stall threshold`() {
+        val gait = StepStream()
+            .steady(175.0, seconds = 90)
+            .still(seconds = 30)
+
+        val config = LoopConfig()
+        val frames = loop(TrackingMode.CONTINUOUS).timeline(gait.samples(), endNs = gait.endNs)
+        val lastStep = frames.last { it.loop.motion == Motion.MOVING }.atNs
+        val noticed = frames.first { it.atNs > lastStep && it.loop.motion == Motion.STOPPED }
+
+        assertTrue(
+            noticed.atNs - lastStep <= config.stallNs + 5 * SECOND_NS,
+            "the stop took ${(noticed.atNs - lastStep) / SECOND_NS}s to notice",
+        )
     }
 
     // Smoothing.

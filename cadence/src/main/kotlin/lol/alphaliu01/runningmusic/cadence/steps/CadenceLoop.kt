@@ -201,6 +201,9 @@ data class LoopConfig(
  * refusing to follow it stops being caution and starts being wrong.
  * @property awayFromBaselineNs how long the runner has been outside the cap
  * without coming back, which is the only thing allowed to move [baseline].
+ * @property lastStepAwakeNs the awake clock at the last delivery, against which
+ * silence is judged. Its wall-clock twin [lastStepArrivalNs] is kept because it
+ * answers a different question: whether anything has ever arrived at all.
  *
  * The remaining properties are bookkeeping, public only because the whole point
  * of this type is that a test can inspect and reconstruct any moment of a run.
@@ -218,7 +221,9 @@ data class CadenceLoop(
     val movingNs: Long = 0L,
     val movingSinceStepNs: Long? = null,
     val startedNs: Long? = null,
+    val startedAwakeNs: Long? = null,
     val lastStepArrivalNs: Long? = null,
+    val lastStepAwakeNs: Long? = null,
     val lastAdvanceNs: Long? = null,
     val lastMoveNs: Long? = null,
 ) {
@@ -232,23 +237,41 @@ data class CadenceLoop(
      * batch of several arriving together is the normal case rather than an
      * exception: the platform was measured handing over roughly a second of
      * steps at a time even when asked for zero latency.
+     * @param awakeNs a clock that stops while the CPU is suspended, against
+     * which silence is judged. Defaults to [nowNs], which says the CPU never
+     * slept and is what a caller with only one clock is asserting anyway.
      *
      * Must be called on a timer as well as on delivery. A loop told only about
      * steps cannot notice their absence, and noticing their absence is most of
      * what this does.
      */
-    fun advance(nowNs: Long, steps: List<Long> = emptyList()): CadenceLoop {
+    fun advance(
+        nowNs: Long,
+        steps: List<Long> = emptyList(),
+        awakeNs: Long = nowNs,
+    ): CadenceLoop {
         val elapsed = lastAdvanceNs?.let { (nowNs - it).coerceAtLeast(0L) } ?: 0L
-
-        // Credit for the interval just ended, capped at the stall threshold. An
-        // unusually long gap between calls means the CPU was suspended, and a
-        // suspended CPU cannot vouch for what the runner was doing; crediting it
-        // in full would let one long sleep satisfy the whole measurement.
-        val credited = if (motion == Motion.MOVING) minOf(elapsed, config.stallNs) else 0L
 
         val newest = window.lastOrNull()
         val fresh = steps.sorted().filter { newest == null || it > newest }
         val merged = if (fresh.isEmpty()) window else window + fresh
+
+        // Credit for the interval just ended. One that delivered steps is
+        // vouched for by them: a cumulative counter keeps counting through
+        // suspend, so steps covering a gap are evidence the runner ran through
+        // it, and refusing to credit that would make a phone sleeping in thirty
+        // second stretches take minutes to satisfy a one minute measurement. An
+        // interval that delivered nothing is capped, because a long silence is
+        // exactly as consistent with a runner who stopped.
+        //
+        // Bounded either way, because an interval cannot honestly be worth more
+        // than the loop's own patience for one; past [LoopConfig.sensorLostNs] we
+        // would have called the sensor dead had we been awake to look.
+        val credited = when {
+            motion != Motion.MOVING -> 0L
+            fresh.isNotEmpty() -> minOf(elapsed, config.sensorLostNs)
+            else -> minOf(elapsed, config.stallNs)
+        }
 
         // Trimmed against the newest step rather than against nowNs, so the two
         // clocks never meet.
@@ -257,7 +280,17 @@ data class CadenceLoop(
 
         val arrival = if (fresh.isNotEmpty()) nowNs else lastStepArrivalNs
         val started = startedNs ?: nowNs
-        val silence = (nowNs - (arrival ?: started)).coerceAtLeast(0L)
+
+        // Silence is judged on the awake clock, and that is the whole reason
+        // there is one. Step sensors with no wakeup variant stop delivering the
+        // moment the CPU suspends, and on a clock that runs through suspend that
+        // is indistinguishable from a runner standing at a crossing: both are a
+        // gap of the same length. The two clocks diverge by exactly the time
+        // spent suspended, so "how long were we awake and heard nothing" is the
+        // question [LoopConfig.stallNs] was always trying to ask.
+        val heardAt = if (fresh.isNotEmpty()) awakeNs else lastStepAwakeNs
+        val startedAwake = startedAwakeNs ?: awakeNs
+        val silence = (awakeNs - (heardAt ?: startedAwake)).coerceAtLeast(0L)
 
         val classified = trimmed.windowSpm(
             atLeast = config.classifyIntervals,
@@ -328,7 +361,9 @@ data class CadenceLoop(
             movingNs = accumulated,
             movingSinceStepNs = movingSince,
             startedNs = started,
+            startedAwakeNs = startedAwake,
             lastStepArrivalNs = arrival,
+            lastStepAwakeNs = heardAt,
             lastAdvanceNs = nowNs,
             lastMoveNs = decided.lastMoveNs,
         )
@@ -429,6 +464,68 @@ private fun List<Long>.median(): Double {
 }
 
 /**
+ * What the awake clock read at a given moment of wall-clock time.
+ *
+ * A replay needs this because the difference between the two clocks is the only
+ * evidence of suspend, and a suspend is what [CadenceLoop.advance] has to tell
+ * apart from a runner standing still.
+ */
+fun interface AwakeClock {
+    fun at(nowNs: Long): Long
+
+    companion object {
+        /** A CPU that never sleeps, which is what a caller with one clock means. */
+        val Always = AwakeClock { it }
+    }
+}
+
+/**
+ * The awake clock these samples were delivered against.
+ *
+ * Between two deliveries the clock is interpolated, because a recording says
+ * how much of a gap was spent suspended but not whereabouts in the gap. Only
+ * the total matters to the loop, whose thresholds are all durations.
+ *
+ * Returns [AwakeClock.Always] for a recording made before uptime was captured,
+ * which is the same thing the loop assumed at the time.
+ */
+fun List<StepSample>.awakeClock(): AwakeClock {
+    val wall = mutableListOf<Long>()
+    val awake = mutableListOf<Long>()
+
+    for (sample in sortedBy { it.receivedElapsedRealtimeNs }) {
+        val uptime = sample.receivedUptimeNs ?: continue
+        if (wall.isNotEmpty() && sample.receivedElapsedRealtimeNs == wall.last()) continue
+        wall += sample.receivedElapsedRealtimeNs
+        awake += uptime
+    }
+
+    if (wall.isEmpty()) return AwakeClock.Always
+
+    return AwakeClock { nowNs ->
+        val hit = wall.binarySearch(nowNs)
+        if (hit >= 0) {
+            awake[hit]
+        } else {
+            val next = -hit - 1
+            when {
+                // Outside the recording there is nothing to interpolate against,
+                // so assume the CPU was up: it is the conservative guess, being
+                // the one that lets a silence read as a stall.
+                next == 0 -> awake.first() - (wall.first() - nowNs)
+                next == wall.size -> awake.last() + (nowNs - wall.last())
+                else -> {
+                    val previous = next - 1
+                    val through = (nowNs - wall[previous]).toDouble() /
+                        (wall[next] - wall[previous])
+                    awake[previous] + ((awake[next] - awake[previous]) * through).toLong()
+                }
+            }
+        }
+    }
+}
+
+/**
  * Runs a recording, or a synthesised one, through [CadenceLoop.advance] exactly
  * as the phone would.
  *
@@ -436,8 +533,12 @@ private fun List<Long>.median(): Double {
  * they happened, so a fixture reproduces the platform's batched delivery rather
  * than an idealised stream the loop will never actually see.
  *
- * @param tickNs the timer interval the caller would use on device. Stall
- * detection is the only thing that depends on it.
+ * @param tickNs the timer interval the caller would use on device, spent in
+ * awake time: the caller's timer is an ordinary delay, which does not fire
+ * through suspend but on the far side of it.
+ * @param awake the CPU's sleep behaviour over the same span. Defaulting to
+ * [AwakeClock.Always] makes a replay that does not care about suspend read as it
+ * did before there was a second clock.
  * @param onTick called after every advance, for a replay that wants a timeline
  * rather than only a verdict.
  */
@@ -446,6 +547,7 @@ fun CadenceLoop.replay(
     tickNs: Long = 5 * SECOND_NS,
     startNs: Long? = null,
     endNs: Long? = null,
+    awake: AwakeClock = AwakeClock.Always,
     onTick: (nowNs: Long, loop: CadenceLoop) -> Unit = { _, _ -> },
 ): CadenceLoop {
     require(tickNs > 0) { "tickNs must be positive, was $tickNs" }
@@ -467,10 +569,39 @@ fun CadenceLoop.replay(
             pending++
         }
 
-        loop = loop.advance(now, due)
+        loop = loop.advance(now, due, awake.at(now))
         onTick(now, loop)
 
         if (now >= end && pending >= ordered.size) return loop
-        now += tickNs
+        now = nextTick(now, tickNs, end, awake, ordered.getOrNull(pending))
     }
+}
+
+/**
+ * When the caller would next be running, having last run at [nowNs].
+ *
+ * A tick costs [tickNs] of awake time, so a suspended CPU skips the ticks it
+ * slept through rather than delivering them late in a burst. A delivery ends the
+ * wait early, since receiving one is itself being awake. Under
+ * [AwakeClock.Always] this is [nowNs] plus [tickNs] and nothing else.
+ */
+private fun nextTick(
+    nowNs: Long,
+    tickNs: Long,
+    endNs: Long,
+    awake: AwakeClock,
+    next: StepSample?,
+): Long {
+    val due = awake.at(nowNs) + tickNs
+
+    // Bounded by whichever comes first of the next delivery and the end of the
+    // replay, so that a clock which stays frozen — a CPU that never wakes again
+    // — ends the replay rather than searching forever for a tick it will never
+    // owe. Under [AwakeClock.Always] the search never runs at all and this is
+    // the plain grid it has always been.
+    val limit = next?.receivedElapsedRealtimeNs ?: endNs
+    var candidate = nowNs + tickNs
+    while (awake.at(candidate) < due && candidate < limit) candidate += tickNs
+
+    return candidate
 }
