@@ -66,7 +66,8 @@ is a future merge conflict.
    adb uninstall com.sosauce.cutemusic.debug
    ```
 
-Release builds need a signing keystore; see `docs/private/RELEASE.md`.
+Release builds need a signing keystore. The local signing notes are not
+published with the repository.
 
 ### Contributing
 
