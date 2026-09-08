@@ -291,6 +291,7 @@
 
     <!-- RunningMusic: running mode -->
     <string name="running_mode">Running</string>
+    <string name="running_mode_active">Running, run in progress</string>
     <string name="running_cadence">Target cadence</string>
     <string name="running_cadence_unit">spm</string>
     <string name="running_cadence_desc">Steps per minute. Tracks are sped up or slowed down so their beat lands under your feet, and one whose tempo is half your cadence needs no stretching at all.</string>
@@ -306,6 +307,8 @@
     <string name="running_stop">End run</string>
     <string name="running_shortfall">%s short of your run. It will simply end early.</string>
     <string name="running_now_playing">%1$.0f bpm, %2$s, playing at %3$s</string>
+    <string name="running_unmatched">Tempo unknown, so this one plays as recorded.</string>
+    <string name="running_past_your_limit">Stretched further than your limit to keep it near your cadence.</string>
     <string name="running_gait_half">one step every two beats</string>
     <string name="running_gait_single">one step per beat</string>
     <string name="running_gait_multi">%d steps per beat</string>

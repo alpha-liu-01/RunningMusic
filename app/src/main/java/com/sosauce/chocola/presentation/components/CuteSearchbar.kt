@@ -426,7 +426,8 @@ private fun SharedTransitionScope.CuteSearchbarContent(
                                 state = textFieldState,
                                 onNavigate = onNavigate,
                                 onSwitchToScreenSelection = { isInScreenSelectionMode = true },
-                                sortingMenuPopupContent = sortMenu
+                                sortingMenuPopupContent = sortMenu,
+                                runningMode = musicState.runningMode
                             )
                         }
                     }
@@ -626,7 +627,8 @@ object CuteSearchbarDefaults {
         state: TextFieldState,
         onNavigate: (Screen) -> Unit,
         sortingMenuPopupContent: @Composable () -> Unit,
-        onSwitchToScreenSelection: () -> Unit
+        onSwitchToScreenSelection: () -> Unit,
+        runningMode: Boolean = false
     ) {
 
         var hasSeenTip by rememberHasSeenTip()
@@ -754,13 +756,32 @@ object CuteSearchbarDefaults {
                                             sortingMenuPopupContent()
                                         }
                                     }
+                                    // Lit while a run is on. Songs can now be
+                                    // picked from anywhere without ending the
+                                    // run, so this is the only thing telling a
+                                    // runner back on the tracks tab that their
+                                    // run is still going.
                                     IconButton(
                                         onClick = { onNavigate(Screen.Running) },
-                                        shapes = IconButtonDefaults.shapes()
+                                        shapes = IconButtonDefaults.shapes(),
+                                        colors = if (runningMode) {
+                                            IconButtonDefaults.iconButtonColors(
+                                                containerColor = MaterialTheme.colorScheme.primary,
+                                                contentColor = MaterialTheme.colorScheme.onPrimary
+                                            )
+                                        } else {
+                                            IconButtonDefaults.iconButtonColors()
+                                        }
                                     ) {
                                         Icon(
                                             painter = painterResource(R.drawable.directions_run),
-                                            contentDescription = stringResource(R.string.running_mode)
+                                            contentDescription = stringResource(
+                                                if (runningMode) {
+                                                    R.string.running_mode_active
+                                                } else {
+                                                    R.string.running_mode
+                                                }
+                                            )
                                         )
                                     }
                                     IconButton(

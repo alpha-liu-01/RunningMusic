@@ -25,7 +25,9 @@ import lol.alphaliu01.runningmusic.cadence.Fold
 import lol.alphaliu01.runningmusic.cadence.RunPlan
 import lol.alphaliu01.runningmusic.cadence.Selected
 import lol.alphaliu01.runningmusic.cadence.ToleranceBand
+import lol.alphaliu01.runningmusic.cadence.fold
 import lol.alphaliu01.runningmusic.cadence.foldAt
+import lol.alphaliu01.runningmusic.cadence.rebaseTail
 import lol.alphaliu01.runningmusic.cadence.selectForRun
 import lol.alphaliu01.runningmusic.cadence.steps.LoopConfig
 import lol.alphaliu01.runningmusic.cadence.steps.TrackingMode
@@ -35,8 +37,16 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
-/** How many tracks past the one playing the player is allowed to know about. */
-private const val LOOKAHEAD = 3
+/**
+ * Hands the player everything the run has planned.
+ *
+ * The player used to be told about the next three tracks only, because a replan
+ * reshuffled the tail and anything further ahead was about to be wrong anyway.
+ * Now that a replan keeps the order, "up next" is stable enough to be worth
+ * looking at, and the queue screen shows the run rather than a four-track window
+ * of it. A run is a dozen or so tracks; there is nothing here to ration.
+ */
+private fun <T> RunPlan<T>.materialiseAll() = materialise(size)
 
 /**
  * Speed is moved over this many milliseconds rather than assigned.
@@ -63,6 +73,16 @@ private const val MINUTE_MS = 60_000L
  * as a running cadence.
  */
 private val CADENCE_RANGE = LoopConfig().cadenceRange
+
+/**
+ * The fold of a track with no analysed tempo: play it as it was recorded.
+ *
+ * Not a real fold, and deliberately not dressed up as one. There is no cadence
+ * this track is matched to, so one step per beat at unity speed is the only
+ * honest thing to claim, and a zero bpm alongside it is what the UI reads to say
+ * as much.
+ */
+private val UNMATCHED = Fold(exponent = 0, rawExponent = 0, speed = 1.0)
 
 /** The tempo, stretch and steps-per-beat of whatever is playing right now. */
 data class RunningTrack(
@@ -109,7 +129,7 @@ data class RunningState(
  * the looper Media3 built it on.
  */
 class RunningModeManager(
-    scanner: AbstractTracksScanner,
+    private val scanner: AbstractTracksScanner,
     metadata: TrackMetadataRepository,
     private val userPreferences: UserPreferences,
     private val cadenceTracker: CadenceTracker,
@@ -200,7 +220,7 @@ class RunningModeManager(
             return
         }
 
-        val (materialised, opening) = RunPlan(queue.tracks.shuffled()).materialise(LOOKAHEAD)
+        val (materialised, opening) = RunPlan(queue.tracks.shuffled()).materialiseAll()
         plan = materialised
         userPreferences.setRunningModeEnabled(true)
 
@@ -321,34 +341,55 @@ class RunningModeManager(
                 stretchedDurationMs = (current.ref.durationMs / held).roundToLong(),
             )
 
-            val played = previous.tracks
-                .take(previous.cursor + 1)
-                .mapTo(mutableSetOf()) { it.ref.mediaId }
+            val known = library.value.associateBy { it.ref.mediaId }
+            val tail = previous.tracks.drop(previous.cursor + 1)
+            val rebasedTail = rebaseTail(tail, targetCadence.toDouble(), settings.tolerance) {
+                known[it.mediaId]
+            }
 
-            val replanned = selectForRun(
-                library = library.value.filterNot { it.ref.mediaId in played },
+            // Re-speeding changes how much of the run the same tracks cover, in
+            // both directions: a slower target stretches them past the length
+            // that was asked for. Filled the same way selectForRun fills, so a
+            // run that has been replanned is the length a fresh one would be.
+            val budget = (settings.runLengthMinutes * MINUTE_MS - rebased.stretchedDurationMs)
+                .coerceAtLeast(0L)
+
+            var filled = 0L
+            val kept = rebasedTail.takeWhile { entry ->
+                val room = filled < budget
+                filled += entry.stretchedDurationMs
+                room
+            }
+
+            // Nothing else is dropped, so this usually removes nothing at all.
+            // Backwards, because each removal shifts what is after it, and plan
+            // and player indices agree.
+            val keptIds = kept.mapTo(mutableSetOf()) { it.ref.mediaId }
+            for (index in previous.materialised - 1 downTo previous.cursor + 1) {
+                if (previous.tracks[index].ref.mediaId !in keptIds) player.removeMediaItem(index)
+            }
+
+            // Whatever the drops and the re-speeding cost, made up from tracks
+            // the run has not already spoken for.
+            val spokenFor =
+                keptIds + previous.tracks.take(previous.cursor + 1).map { it.ref.mediaId }
+
+            val topUp = selectForRun(
+                library = library.value.filterNot { it.ref.mediaId in spokenFor },
                 targetCadence = targetCadence.toDouble(),
-                runLengthMs = (settings.runLengthMinutes * MINUTE_MS - rebased.stretchedDurationMs)
-                    .coerceAtLeast(0L),
+                runLengthMs = (budget - kept.sumOf { it.stretchedDurationMs }).coerceAtLeast(0L),
                 band = settings.tolerance,
             )
 
-            val next = previous
+            val (materialised, added) = previous
                 .withCurrent(rebased)
-                .replaceTail(replanned.tracks.shuffled())
+                .rebuildTail(kept, topUp.tracks.shuffled())
+                .materialiseAll()
 
-            // The player is still holding the tail that was just discarded.
-            // Player and plan indices agree because the window only ever grows
-            // forwards, so nothing already played is ever removed.
-            if (player.mediaItemCount > next.cursor + 1) {
-                player.removeMediaItems(next.cursor + 1, player.mediaItemCount)
-            }
-
-            val (materialised, added) = next.materialise(LOOKAHEAD)
             plan = materialised
             if (added.isNotEmpty()) player.addMediaItems(added.map { it.ref.toMediaItem() })
 
-            publish(active = true, shortfall = replanned.shortfallMs)
+            publish(active = true, shortfall = topUp.shortfallMs)
             ramp(held.toFloat())
         }
     }
@@ -384,11 +425,179 @@ class RunningModeManager(
     }
 
     /**
+     * Plays [mediaId] inside the run rather than instead of it.
+     *
+     * A run is a mode the player is in, not a playlist it owns, so asking for a
+     * particular song is not an act of abandoning the run. Anything the runner
+     * picks anywhere in the app arrives here and joins the plan.
+     *
+     * Something already planned is simply seeked to, wherever in the run it sits.
+     * Anything else is put next, in front of what was coming rather than in place
+     * of it, so the run resumes where it was once the detour finishes.
+     */
+    suspend fun playNow(mediaId: String) {
+        if (!_state.value.active) return
+        val settings = currentSettings()
+
+        withContext(Dispatchers.Main.immediate) {
+            val player = player ?: return@withContext
+            val previous = plan ?: return@withContext
+
+            val planned = previous.indexOf { it.mediaId == mediaId }
+            if (planned >= 0) {
+                player.seekTo(planned, 0)
+                player.play()
+                return@withContext
+            }
+
+            val track = scanner.latestTracks.value.firstOrNull { it.mediaId == mediaId }
+                ?: return@withContext
+
+            val spliced = previous.insertAfterCursor(entryFor(track, settings))
+            plan = spliced
+
+            // Located by searching rather than by repeating the arithmetic
+            // insertAfterCursor just did. There was no entry for this track a
+            // moment ago, so the first match is the one that was inserted.
+            val at = spliced.indexOf { it.mediaId == mediaId }
+            player.addMediaItem(at, track.toMediaItem())
+            player.seekTo(at, 0)
+            player.play()
+        }
+    }
+
+    /** Puts [mediaId] next without interrupting what is playing. */
+    suspend fun queueNext(mediaId: String) {
+        if (!_state.value.active) return
+        val settings = currentSettings()
+
+        withContext(Dispatchers.Main.immediate) {
+            val player = player ?: return@withContext
+            val previous = plan ?: return@withContext
+
+            // Something the run had already planned for later is brought
+            // forward rather than added a second time.
+            val planned = previous.indexOf { it.mediaId == mediaId }
+            if (planned >= 0) {
+                moveInQueue(planned, previous.cursor + 1)
+                return@withContext
+            }
+
+            val track = scanner.latestTracks.value.firstOrNull { it.mediaId == mediaId }
+                ?: return@withContext
+
+            val spliced = previous.insertAfterCursor(entryFor(track, settings))
+            plan = spliced
+            player.addMediaItem(spliced.indexOf { it.mediaId == mediaId }, track.toMediaItem())
+            publish(active = true, shortfall = null)
+        }
+    }
+
+    /** Adds [mediaIds] to the end of the run, skipping any already in it. */
+    suspend fun appendToQueue(mediaIds: List<String>) {
+        if (!_state.value.active) return
+        val settings = currentSettings()
+
+        withContext(Dispatchers.Main.immediate) {
+            val player = player ?: return@withContext
+            val previous = plan ?: return@withContext
+
+            val tracks = scanner.latestTracks.value
+            val added = mediaIds
+                .filter { id -> previous.indexOf { it.mediaId == id } < 0 }
+                .mapNotNull { id -> tracks.firstOrNull { it.mediaId == id } }
+                .map { entryFor(it, settings) }
+
+            if (added.isEmpty()) return@withContext
+
+            plan = previous.append(added)
+            player.addMediaItems(added.map { it.ref.toMediaItem() })
+            publish(active = true, shortfall = null)
+        }
+    }
+
+    /**
+     * How a track the plan never chose is played, which is: as well as we can,
+     * and audibly rather than not at all.
+     *
+     * Refusing a song the runner explicitly asked for would be worse than
+     * playing it imperfectly, so a tempo needing more stretch than they allow is
+     * clamped back to their limit — the same treatment [applyCadence] gives a
+     * track the cadence has drifted away from — and one with no tempo at all
+     * plays untouched. Both cases are visible to the UI, which derives them from
+     * the bpm and the speed rather than from a flag stored here.
+     */
+    private fun entryFor(track: CuteTrack, settings: RunningSettings): Selected<CuteTrack> {
+        val bpm = bpmOf(track)
+        val folded = if (bpm == null) {
+            UNMATCHED
+        } else {
+            val fold = fold(bpm, settings.targetCadence.toDouble())
+            if (settings.tolerance.accepts(fold)) {
+                fold
+            } else {
+                fold.copy(speed = settings.tolerance.clamp(fold.speed))
+            }
+        }
+
+        return Selected(
+            ref = track,
+            fold = folded,
+            stretchedDurationMs = (track.durationMs / folded.speed).roundToLong(),
+        )
+    }
+
+    /**
+     * Reorders what is coming up, keeping the plan and the player in step.
+     *
+     * Both indices are the same number in either, which is the invariant RunPlan
+     * exists to hold, so the two edits are the same edit. A move the plan refuses
+     * — onto a track already played, or one playing now — must not reach the
+     * player either, hence the comparison rather than an unconditional call.
+     */
+    suspend fun moveInQueue(from: Int, to: Int) {
+        if (!_state.value.active) return
+
+        withContext(Dispatchers.Main.immediate) {
+            val player = player ?: return@withContext
+            val previous = plan ?: return@withContext
+
+            val moved = previous.move(from, to)
+            if (moved === previous) return@withContext
+
+            plan = moved
+            player.moveMediaItem(from, to)
+            publish(active = true, shortfall = null)
+        }
+    }
+
+    /** Drops a queued track from the run. Refused for one played or playing. */
+    suspend fun removeFromQueue(mediaId: String) {
+        if (!_state.value.active) return
+
+        withContext(Dispatchers.Main.immediate) {
+            val player = player ?: return@withContext
+            val previous = plan ?: return@withContext
+
+            val at = previous.indexOf { it.mediaId == mediaId }
+            if (at < 0) return@withContext
+
+            val removed = previous.removeAt(at)
+            if (removed === previous) return@withContext
+
+            plan = removed
+            player.removeMediaItem(at)
+            publish(active = true, shortfall = null)
+        }
+    }
+
+    /**
      * The player moved on. Re-speeds for the new track and extends the window.
      *
      * A track that is not in the plan means something outside running mode took
-     * the queue over, which is a deliberate act by the user, so the run ends
-     * rather than fighting them for control of the player.
+     * the queue over without routing through [playNow]. Nothing in the UI should
+     * be able to do that any more, so reaching this means plan and player have
+     * lost sync, and carrying on would be worse than stopping.
      */
     suspend fun onTransition(mediaId: String?) {
         if (!_state.value.active) return
@@ -404,7 +613,7 @@ class RunningModeManager(
 
             val (materialised, added) = previous
                 .advanceTo { it.mediaId == mediaId }
-                .materialise(LOOKAHEAD)
+                .materialiseAll()
             plan = materialised
 
             if (added.isNotEmpty()) player.addMediaItems(added.map { it.ref.toMediaItem() })

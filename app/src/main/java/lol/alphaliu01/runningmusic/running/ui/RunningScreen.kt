@@ -310,14 +310,27 @@ private fun InProgress(ui: RunningUi) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        Muted(
-            stringResource(
-                R.string.running_now_playing,
-                current.bpm,
-                gait(current.fold),
-                percent(current.speed)
+        // A run is a mode the player is in, so the track playing is not always
+        // one the run chose. When the runner has picked something themselves it
+        // may have no analysed tempo at all, or one the cadence cannot reach
+        // within their stretch limits, and either way the speed on its own would
+        // look like a bug rather than a decision.
+        if (current.bpm <= 0.0) {
+            Muted(stringResource(R.string.running_unmatched))
+        } else {
+            Muted(
+                stringResource(
+                    R.string.running_now_playing,
+                    current.bpm,
+                    gait(current.fold),
+                    percent(current.speed)
+                )
             )
-        )
+
+            if (!ui.settings.tolerance.accepts(current.speed)) {
+                Muted(stringResource(R.string.running_past_your_limit))
+            }
+        }
     }
 
     if (summary != null) {

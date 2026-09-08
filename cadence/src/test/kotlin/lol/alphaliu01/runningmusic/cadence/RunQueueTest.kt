@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.math.roundToLong
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -161,5 +162,104 @@ class RunQueueTest {
         val library = listOf(track("a", 170.0))
         assertFailsWith<IllegalArgumentException> { selectForRun(library, 0.0, FIVE_MINUTES) }
         assertFailsWith<IllegalArgumentException> { selectForRun(library, CADENCE, -1) }
+    }
+}
+
+class RebaseTailTest {
+
+    private val library = listOf(
+        track("perfect", 170.0),
+        track("slightly fast", 175.0),
+        track("half tempo", 85.0),
+        track("slightly slow", 165.0),
+    )
+
+    private fun rebase(
+        tail: List<Selected<String>>,
+        cadence: Double,
+        band: ToleranceBand = ToleranceBand.DEFAULT,
+    ) = rebaseTail(tail, cadence, band) { name -> library.firstOrNull { it.ref == name } }
+
+    private fun planned(cadence: Double, vararg names: String) = names.map { name ->
+        val candidate = library.first { it.ref == name }
+        val folded = fold(candidate.bpm, cadence)
+        Selected(name, folded, (candidate.durationMs / folded.speed).roundToLong())
+    }
+
+    /**
+     * The point of the whole function. Reselecting instead would rank by
+     * deviation from the new target and hand back a different order, which the
+     * runner sees as their queue rearranging itself for no visible reason.
+     */
+    @Test
+    fun `a small cadence move leaves the order alone`() {
+        val tail = planned(170.0, "slightly slow", "perfect", "half tempo", "slightly fast")
+
+        val rebased = rebase(tail, 172.0)
+
+        assertContentEquals(
+            listOf("slightly slow", "perfect", "half tempo", "slightly fast"),
+            rebased.map { it.ref },
+        )
+    }
+
+    @Test
+    fun `speeds and stretched durations follow the new cadence`() {
+        val tail = planned(170.0, "perfect")
+
+        val rebased = rebase(tail, 187.0)
+
+        // 187 / 170 is 1.1, and a five-minute track played 10% fast fills less.
+        assertEquals(1.1, rebased.single().fold.speed, 1e-9)
+        assertEquals((FIVE_MINUTES / 1.1).roundToLong(), rebased.single().stretchedDurationMs)
+    }
+
+    /**
+     * Dropping is by tempo, not by position, so a run does not lose the tracks
+     * that happened to sit next to the one it could no longer use.
+     */
+    @Test
+    fun `an entry the new cadence cannot reach is dropped and its neighbours are not`() {
+        val tail = planned(170.0, "perfect", "slightly slow", "half tempo")
+
+        // At 178 spm 165 bpm needs 1.079x, past a 1.05 band. 170 bpm needs
+        // 1.047x, and 85 bpm reaches the same speed at two steps per beat.
+        val rebased = rebase(tail, 178.0, ToleranceBand.symmetric(1.05))
+
+        assertContentEquals(listOf("perfect", "half tempo"), rebased.map { it.ref })
+    }
+
+    /**
+     * A track picked mid-run before anything had analysed it. It plays as it was
+     * recorded whatever the cadence does, and the runner asked for it, so a
+     * replan has no business quietly taking it back out of the queue.
+     */
+    @Test
+    fun `an entry with no tempo to rebase against survives untouched`() {
+        val unanalysed = Selected("picked", Fold(exponent = 0, rawExponent = 0, speed = 1.0), 1L)
+        val tail = planned(170.0, "perfect") + unanalysed
+
+        val rebased = rebase(tail, 187.0)
+
+        assertContentEquals(listOf("perfect", "picked"), rebased.map { it.ref })
+        assertEquals(unanalysed, rebased.last())
+    }
+
+    /** The same rule, and the reason it matters most: no library, no changes. */
+    @Test
+    fun `a library that has not loaded yet does not empty the run`() {
+        val tail = planned(170.0, "perfect", "half tempo")
+
+        assertContentEquals(tail, rebaseTail(tail, 187.0) { null })
+    }
+
+    @Test
+    fun `nothing to rebase is not an error`() {
+        assertTrue(rebase(emptyList(), CADENCE).isEmpty())
+    }
+
+    @Test
+    fun `rejects an impossible cadence`() {
+        assertFailsWith<IllegalArgumentException> { rebase(planned(170.0, "perfect"), 0.0) }
     }
 }

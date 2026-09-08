@@ -50,7 +50,11 @@ fun QueueScreen(
     val hapticFeedback = LocalHapticFeedback.current
     val lazyListState = rememberLazyListState()
     val activeTrackId = remember(musicState.track) { musicState.track.mediaId }
-    val queueItems = remember {
+    // Keyed, because the queue is no longer only ever changed from here. During
+    // a run the plan owns it and can refuse an edit — reordering something
+    // already played, say — and a list remembered once would keep showing the
+    // edit that did not happen.
+    val queueItems = remember(musicState.loadedMedias) {
         musicState.loadedMedias.fastMap {
             QueueItem(
                 id = Random.nextInt(),
