@@ -2,9 +2,8 @@
 
 Real recordings. Runs 0 to 4 come from the sensor spike, captured on a Xiaomi
 Redmi Note 12 5G running Android 16 (API 36) with the Qualcomm `step_detect`
-sensor. Written by `StepRecorder`, read by `parseStepRecording`, and documented
-in full by [SENSOR_SPIKE.md](../../../../../docs/private/SENSOR_SPIKE.md), whose
-run numbering these filenames follow. Run 5 comes from a different phone
+sensor. Written by `StepRecorder`, read by `parseStepRecording`. Run numbering
+in these filenames follows the sensor-spike notes. Run 5 comes from a different phone
 entirely and is here to prove that the first five were lucky.
 
 They are checked in because a recording is the only honest input the control

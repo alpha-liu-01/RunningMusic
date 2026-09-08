@@ -20,7 +20,8 @@ androidComponents {
 }
 
 // On CI, release_stable.yml decodes secrets.SIGNING_KEY into this path before
-// building. Locally it has to be put there by hand; see docs/private/RELEASE.md.
+// building. Locally, copy the release keystore here and set the three
+// environment variables below.
 val releaseKeystore = file("release_key.jks")
 val releaseStorePassword = providers.environmentVariable("SIGNING_STORE_PASSWORD")
 val releaseKeyAlias = providers.environmentVariable("SIGNING_KEY_ALIAS")
@@ -187,7 +188,6 @@ val checkReleaseSigning = tasks.register("checkReleaseSigning") {
 
             On CI, .github/workflows/release_stable.yml decodes secrets.SIGNING_KEY
             into that path and supplies the three variables from the other secrets.
-            To set this up locally, see docs/private/RELEASE.md.
 
             To build an unsigned release APK anyway, for R8 or size checks:
               ./gradlew assembleRelease -Prunningmusic.allowUnsignedRelease=true
