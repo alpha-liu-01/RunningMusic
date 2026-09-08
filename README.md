@@ -59,10 +59,10 @@ Chocola, and therefore almost all of the code here, is the work of
 this app, the person to thank and to support is sosauce — their support page is
 linked from the app's About screen.
 
-Translations were contributed to Chocola through its Weblate project. This fork
-does not run its own translation project; please contribute translations
-[upstream](https://hosted.weblate.org/engage/chocola/), where they benefit
-everyone.
+Chocola's existing translations remain in this tree. Simplified Chinese and
+French for RunningMusic's own strings (cadence, tempo analysis, running mode)
+are maintained here, in `values-zh-rCN` and `values-fr`. There is no Weblate
+project for this fork.
 
 ## License
 
@@ -85,5 +85,5 @@ everyone.
 The full text is in [LICENSE](LICENSE). The bundled font is licensed separately
 under OFL-1.1; see [font_licence.txt](font_licence.txt).
 
-RunningMusic is a modified version of Chocola. See [NOTICE.md](NOTICE.md) for the
+RunningMusic is a modified version of Chocola. See [docs/NOTICE.md](docs/NOTICE.md) for the
 GPLv3 section 5(a) modification notice and for the status of the branding assets.

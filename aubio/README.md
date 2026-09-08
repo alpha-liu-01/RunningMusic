@@ -24,7 +24,7 @@ into a merge. Upstream's own `wscript_build`, `meson.build` and `CMakeLists.txt`
 come along for the same reason; none of them is used.
 
 To re-vendor, replace the directory wholesale from a new commit and update the
-hash above, this module's source list, and [NOTICE.md](../NOTICE.md).
+hash above, this module's source list, and [NOTICE.md](../docs/NOTICE.md).
 
 ## Why we build it ourselves
 
