@@ -85,5 +85,5 @@ everyone.
 The full text is in [LICENSE](LICENSE). The bundled font is licensed separately
 under OFL-1.1; see [font_licence.txt](font_licence.txt).
 
-RunningMusic is a modified version of Chocola. See [NOTICE.md](NOTICE.md) for the
+RunningMusic is a modified version of Chocola. See [docs/NOTICE.md](docs/NOTICE.md) for the
 GPLv3 section 5(a) modification notice and for the status of the branding assets.
