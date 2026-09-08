@@ -43,7 +43,7 @@ jobs:
 
     - name: Get versionName
       id: versionname
-      run: echo "versionName=$(grep 'versionName' app/build.gradle.kts | head -1 | awk -F\" '{ print $2 }')" >> $GITHUB_OUTPUT
+      run: echo "versionName=$(grep -E '^\s*versionName\s*=' app/build.gradle.kts | head -1 | awk -F\" '{ print $2 }')" >> $GITHUB_OUTPUT
 
     - name: Decode Keystore
       uses: timheuer/base64-to-file@v1
