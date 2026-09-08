@@ -59,10 +59,10 @@ Chocola, and therefore almost all of the code here, is the work of
 this app, the person to thank and to support is sosauce — their support page is
 linked from the app's About screen.
 
-Translations were contributed to Chocola through its Weblate project. This fork
-does not run its own translation project; please contribute translations
-[upstream](https://hosted.weblate.org/engage/chocola/), where they benefit
-everyone.
+Chocola's existing translations remain in this tree. Simplified Chinese and
+French for RunningMusic's own strings (cadence, tempo analysis, running mode)
+are maintained here, in `values-zh-rCN` and `values-fr`. There is no Weblate
+project for this fork.
 
 ## License
 
