@@ -110,7 +110,49 @@ private fun StepRecording.report(expectedSteps: Int?) {
         println("  gaps         ${gaps.size}: " + gaps.joinToString { "${"%.1f".format(it / 1e9)}s" })
     }
 
+    reportCounter()
+
+    // What the detector claimed each event was worth. The platform defines this
+    // as always 1.0, so anything else is a vendor counting steps in a field
+    // nobody reads, and would explain a detector firing slower than the legs.
+    val reported = steps.mapNotNull { it.reportedSteps }.distinct().sorted()
+    if (reported.isNotEmpty() && reported != listOf(1.0f)) {
+        println("  values[0]    ${reported.joinToString()} — detector is not reporting one step per event")
+    }
+
     if (accel.isNotEmpty()) println("  accel        ${accel.size} samples")
+}
+
+/**
+ * The counter's verdict beside the detector's, because where they disagree the
+ * counter is right.
+ */
+private fun StepRecording.reportCounter() {
+    if (counter.size < 2) {
+        println("  counter      ${if (counter.isEmpty()) "not recorded" else "one reading only"}")
+        return
+    }
+
+    val counted = (counter.last().steps - counter.first().steps).roundToInt()
+    val spanNs = counter.last().sensorTimestampNs - counter.first().sensorTimestampNs
+    val spanMin = spanNs / 60_000_000_000.0
+    if (spanMin <= 0) {
+        println("  counter      ${counter.size} readings, no time between them")
+        return
+    }
+
+    val cadence = counted / spanMin
+    println(
+        "  counter      $counted steps over ${"%.1f".format(spanMin)} min" +
+            " = ${"%.1f".format(cadence)} spm, from ${counter.size} readings"
+    )
+
+    val detectorCadence = steps.size / spanMin
+    val disagreement = 100.0 * (steps.size - counted) / counted
+    println(
+        "  detector     ${"%.1f".format(detectorCadence)} spm over the same span," +
+            " ${"%+.0f".format(disagreement)}% of the counted steps"
+    )
 }
 
 private fun List<Double>.percentile(p: Int): Double {

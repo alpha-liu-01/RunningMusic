@@ -2,21 +2,34 @@ package lol.alphaliu01.runningmusic.cadence
 
 import kotlin.math.abs
 import kotlin.math.log2
+import kotlin.math.pow
 import kotlin.math.round
 
 /**
- * Steps-per-beat exponents a runner can actually use.
+ * Steps-per-beat exponents a runner or walker can actually use.
  *
- * A target cadence of 150-190 spm is reachable at one step per beat (k = 0, so
- * 150-190 bpm) and at two (k = 1, so 75-95 bpm). Four steps per beat would need
- * 37-48 bpm tracks, which barely exist and are too sparse to entrain to; one step
- * per two beats would need 300-380 bpm, which do not exist at all.
+ * At one step per beat (k = 0) a 170 spm runner needs 170 bpm; at two (k = 1),
+ * 85 bpm. Those two alone cover running, and for a while they were the only two
+ * allowed, on the argument that k = -1 would need 300-380 bpm tracks and k = 2
+ * would need 37-48 bpm ones, neither of which meaningfully exist.
  *
- * The range is a hard clamp rather than a hint. Trusting [round] alone would let
- * a mis-detected 40 bpm ambient track report a perfect match at four steps per
- * beat.
+ * That argument was only ever true for running. Once the target can be a walk,
+ * k = -1 is not the exotic case, it is the *best* one: a 100 spm walk at one
+ * step every two beats wants 200 bpm... but far more usefully, a 60-65 spm
+ * stroll wants exactly the 120-130 bpm cluster that the octave-folding notes
+ * call the single largest tempo peak in pop and EDM, and that a running cadence
+ * can never reach. Leaving k at 0..1 meant every cadence below about 100 spm
+ * matched nothing at all, because the tracks it needed were all one octave
+ * above the highest fold on offer.
+ *
+ * k = 2 stays out. Four steps per beat is a beat too sparse to entrain to, and
+ * the clamp is what stops a mis-detected 40 bpm ambient track reporting a
+ * perfect match there.
  */
-val REACHABLE_EXPONENTS = 0..1
+val REACHABLE_EXPONENTS = -1..1
+
+/** `2^k` for a steps-per-beat exponent, which may be negative. */
+internal fun octave(exponent: Int): Double = 2.0.pow(exponent)
 
 /**
  * The result of folding one track's tempo onto a target cadence.
@@ -30,8 +43,17 @@ data class Fold(
     val rawExponent: Int,
     val speed: Double,
 ) {
-    /** 1, 2, 4... steps per beat. */
-    val stepsPerBeat: Int get() = 1 shl exponent
+    /** `2^k`: 0.5 for a step every other beat, 1 per beat, 2 per beat. */
+    val stepsPerBeat: Double get() = octave(exponent)
+
+    /**
+     * The gait as a whole-number ratio, for saying it out loud.
+     *
+     * One of the two is always 1, so `1 to 2` reads "one step every two beats"
+     * and `2 to 1` reads "two steps per beat".
+     */
+    val stepsToBeats: Pair<Int, Int>
+        get() = if (exponent >= 0) (1 shl exponent) to 1 else 1 to (1 shl -exponent)
 
     /** Signed distance from unity in octaves. This is the quantity to rank by. */
     val logDeviation: Double get() = log2(speed)
@@ -85,7 +107,7 @@ fun fold(bpm: Double, targetCadence: Double): Fold {
     // clamp below, not the rounding rule, is what keeps k usable.
     val rawExponent = round(log2(targetCadence / bpm)).toInt()
     val exponent = rawExponent.coerceIn(REACHABLE_EXPONENTS)
-    val folded = bpm * (1 shl exponent)
+    val folded = bpm * octave(exponent)
 
     return Fold(
         exponent = exponent,
@@ -119,5 +141,5 @@ fun foldAt(bpm: Double, targetCadence: Double, exponent: Int): Double {
         "exponent must be in $REACHABLE_EXPONENTS, was $exponent"
     }
 
-    return targetCadence / (bpm * (1 shl exponent))
+    return targetCadence / (bpm * octave(exponent))
 }

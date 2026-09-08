@@ -177,6 +177,10 @@ class PlaybackService : MediaLibraryService(), KoinComponent {
             .setDeviceVolumeControlEnabled(true)
             .setHandleAudioBecomingNoisy(true)
             .setAudioAttributes(audioAttributes, true)
+            // Running mode reads a non-wakeup step detector on some phones, and
+            // those stop delivering once the CPU suspends. Holding the CPU up
+            // for the length of a run keeps the cadence loop fed.
+            .setWakeMode(C.WAKE_MODE_LOCAL)
             .build()
         mediaLibrarySession = MediaLibrarySession
             .Builder(this, player, callback)

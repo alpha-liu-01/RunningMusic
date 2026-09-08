@@ -35,8 +35,20 @@ class FoldTest {
 
     @Test
     fun `steps per beat is two to the power of the exponent`() {
-        assertEquals(1, fold(170.0, 170.0).stepsPerBeat)
-        assertEquals(2, fold(85.0, 170.0).stepsPerBeat)
+        assertEquals(1.0, fold(170.0, 170.0).stepsPerBeat)
+        assertEquals(2.0, fold(85.0, 170.0).stepsPerBeat)
+        assertEquals(0.5, fold(250.0, 125.0).stepsPerBeat)
+    }
+
+    /**
+     * The same three gaits said the way a person would say them, because "0.5
+     * steps per beat" is not a sentence anybody means.
+     */
+    @Test
+    fun `the gait reads as a whole-number ratio`() {
+        assertEquals(1 to 1, fold(170.0, 170.0).stepsToBeats)
+        assertEquals(2 to 1, fold(85.0, 170.0).stepsToBeats)
+        assertEquals(1 to 2, fold(250.0, 125.0).stepsToBeats)
     }
 
     @Test
@@ -80,7 +92,7 @@ class FoldTest {
     @ParameterizedTest(name = "{0} bpm at 170 spm clamps and escapes the residual bound")
     @CsvSource(
         "40,  2",   // a mis-detected ambient track: nearest match is four steps per beat
-        "400, -1",  // faster than any real music: nearest match is one step per two beats
+        "800, -2",  // faster than any real music: nearest match is one step per four beats
     )
     fun `clamping lets speed escape the residual bound`(bpm: Double, expectedRaw: Int) {
         val fold = fold(bpm, 170.0)
@@ -179,13 +191,53 @@ class FoldAtTest {
 
         assertEquals(0.425, speed, 1e-12)
         assertTrue(speed < 1.0 / MAX_RESIDUAL)
-        assertEquals(ToleranceBand.CEILING.minSpeed, ToleranceBand.CEILING.clamp(speed), 1e-12)
+        assertEquals(ToleranceBand.DEFAULT.minSpeed, ToleranceBand.DEFAULT.clamp(speed), 1e-12)
     }
 
     @Test
     fun `rejects an exponent no runner can use`() {
-        assertFailsWith<IllegalArgumentException> { foldAt(120.0, 170.0, -1) }
+        assertFailsWith<IllegalArgumentException> { foldAt(120.0, 170.0, -2) }
         assertFailsWith<IllegalArgumentException> { foldAt(120.0, 170.0, 2) }
+    }
+
+    /**
+     * The fold that the old 0..1 range could not express, and the reason every
+     * cadence below about 100 spm matched nothing at all.
+     *
+     * A 125 bpm track is the single most common tempo in pop and EDM, and at one
+     * step every two beats it carries a 62.5 spm walk with no stretch whatsoever.
+     */
+    @Test
+    fun `a walking cadence reaches the biggest tempo cluster in the library`() {
+        val fold = fold(125.0, 62.5)
+
+        assertEquals(-1, fold.exponent)
+        assertFalse(fold.wasClamped)
+        assertEquals(1.0, fold.speed, 1e-12)
+    }
+
+    /**
+     * The invariant that made the bug visible: halving a target cadence cannot
+     * lose tracks, because every track reachable at k is reachable at k - 1 one
+     * octave down. With the exponents clamped to 0..1 this failed outright —
+     * 140 spm found tracks and 70 spm found none of them.
+     */
+    @ParameterizedTest
+    @ValueSource(doubles = [140.0, 170.0, 180.0, 200.0])
+    fun `halving the cadence keeps everything the faster cadence accepted`(cadence: Double) {
+        var bpm = 60.0
+        while (bpm <= 220.0) {
+            val fast = fold(bpm, cadence)
+            if (!fast.wasClamped && ToleranceBand.DEFAULT.accepts(fast)) {
+                val half = fold(bpm, cadence / 2)
+                assertTrue(
+                    !half.wasClamped && ToleranceBand.DEFAULT.accepts(half),
+                    "$bpm bpm fits ${cadence.toInt()} spm but not ${(cadence / 2).toInt()} spm",
+                )
+                assertEquals(fast.speed, half.speed, 1e-12)
+            }
+            bpm += 0.25
+        }
     }
 
     @ParameterizedTest

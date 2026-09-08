@@ -50,8 +50,9 @@ data class RunQueue<out T>(
  * until the run is full, so the result minimises average distortion instead of
  * merely bounding it.
  *
- * [ceiling] is a hard limit that ranking never exceeds. A library too thin to
- * fill the run comes back short rather than stretched past listenability.
+ * [band] is a hard limit that ranking never exceeds. A library too thin to
+ * fill the run comes back short rather than stretched past what the listener
+ * said they would accept.
  *
  * Candidates with a non-positive bpm or duration are dropped rather than
  * rejected loudly, because a tempo detector that fails on one file should not
@@ -66,7 +67,7 @@ fun <T> selectForRun(
     library: List<Candidate<T>>,
     targetCadence: Double,
     runLengthMs: Long,
-    ceiling: ToleranceBand = ToleranceBand.CEILING,
+    band: ToleranceBand = ToleranceBand.DEFAULT,
 ): RunQueue<T> {
     require(targetCadence > 0.0 && targetCadence.isFinite()) {
         "targetCadence must be positive and finite, was $targetCadence"
@@ -77,7 +78,7 @@ fun <T> selectForRun(
         .asSequence()
         .filter { it.bpm > 0.0 && it.bpm.isFinite() && it.durationMs > 0 }
         .map { it to fold(it.bpm, targetCadence) }
-        .filter { (_, fold) -> ceiling.accepts(fold) }
+        .filter { (_, fold) -> band.accepts(fold) }
         .sortedBy { (_, fold) -> fold.absLogDeviation }
         .toList()
 

@@ -71,7 +71,6 @@ data class RunningTrack(
     val fold: Fold,
 ) {
     val speed: Double get() = fold.speed
-    val stepsPerBeat: Int get() = fold.stepsPerBeat
 }
 
 /**
@@ -190,6 +189,7 @@ class RunningModeManager(
             library = library.value,
             targetCadence = settings.targetCadence.toDouble(),
             runLengthMs = settings.runLengthMinutes * MINUTE_MS,
+            band = settings.tolerance,
         )
 
         if (queue.tracks.isEmpty()) {
@@ -231,22 +231,28 @@ class RunningModeManager(
     /**
      * Hands the target to the step detector for the rest of the run.
      *
-     * The library-fit nudge is applied once, at the lock, and then carried as a
-     * fixed offset. Re-running it on every update would let a one spm change in
-     * what the runner is doing move the target by up to the suggestion radius,
-     * because coverage is a lumpy function of cadence — which is the entire
-     * reason the nudge exists, and exactly why it must not be inside the loop.
+     * The library-fit nudge belongs to [TrackingMode.MEASURE_THEN_LOCK] and to
+     * nothing else. That mode measures once and then holds, so the nudge is a
+     * single offer of a better-covered cadence and the runner is free to ignore
+     * it. Follow mode closes a loop through the runner, who hears the target and
+     * synchronises to it, and a *constant* offset inside a closed loop is not
+     * absorbed, it is integrated: the runner speeds up to the nudged target, the
+     * loop measures the faster cadence, the nudge is added again, and the two
+     * walk each other up until the drift cap stops them several spm above the
+     * pace the runner actually chose. Freezing the offset, which is what this
+     * used to do, prevents it from jittering and does nothing about that.
      */
     private fun startTracking(settings: RunningSettings) {
+        val nudges = settings.trackingMode == TrackingMode.MEASURE_THEN_LOCK
         var offset: Int? = null
 
         cadenceTracker.start(
             mode = settings.trackingMode,
             initialTarget = settings.targetCadence,
-        ) { measured ->
+        ) { target ->
             scope.launch {
-                val nudge = offset ?: (snapToLibrary(measured) - measured).also { offset = it }
-                applyCadence((measured + nudge).coerceIn(CADENCE_RANGE))
+                if (nudges && offset == null) offset = snapToLibrary(target) - target
+                applyCadence((target + (offset ?: 0)).coerceIn(CADENCE_RANGE))
             }
         }
     }
@@ -259,10 +265,11 @@ class RunningModeManager(
      * can unlock a large part of it. Nudging a runner slightly is defensible;
      * playing them 40 minutes of badly stretched music is not.
      */
-    private fun snapToLibrary(measured: Int): Int {
+    private suspend fun snapToLibrary(measured: Int): Int {
         val library = library.value
         if (library.isEmpty()) return measured
-        return suggestCadence(library, measured.toDouble()).best.cadence.roundToInt()
+        val band = currentSettings().tolerance
+        return suggestCadence(library, measured.toDouble(), band = band).best.cadence.roundToInt()
     }
 
     /**
@@ -306,7 +313,7 @@ class RunningModeManager(
             val current = previous.current ?: return@withContext
             val bpm = bpmOf(current.ref) ?: return@withContext
 
-            val held = ToleranceBand.CEILING.clamp(
+            val held = settings.tolerance.clamp(
                 foldAt(bpm, targetCadence.toDouble(), current.fold.exponent)
             )
             val rebased = current.copy(
@@ -323,6 +330,7 @@ class RunningModeManager(
                 targetCadence = targetCadence.toDouble(),
                 runLengthMs = (settings.runLengthMinutes * MINUTE_MS - rebased.stretchedDurationMs)
                     .coerceAtLeast(0L),
+                band = settings.tolerance,
             )
 
             val next = previous
@@ -348,6 +356,16 @@ class RunningModeManager(
     suspend fun setRunLength(minutes: Int) = persist { it.copy(runLengthMinutes = minutes) }
 
     suspend fun setTrackingMode(mode: TrackingMode) = persist { it.copy(trackingMode = mode) }
+
+    /**
+     * Widening or tightening the tolerance changes which tracks are eligible, so
+     * a run already under way is replanned at its current target rather than
+     * carrying on with a queue chosen under the old limits.
+     */
+    suspend fun setTolerance(band: ToleranceBand) {
+        persist { it.copy(tolerance = band) }
+        if (_state.value.active) applyCadence(currentSettings().targetCadence)
+    }
 
     /**
      * Writes one field through to DataStore and mirrors it into the live state.

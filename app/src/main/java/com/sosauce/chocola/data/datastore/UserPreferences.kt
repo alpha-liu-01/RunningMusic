@@ -2,6 +2,7 @@ package com.sosauce.chocola.data.datastore
 
 import android.content.Context
 import androidx.compose.ui.util.fastMap
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import com.sosauce.chocola.data.datastore.PreferencesKeys.ALBUM_SORT
 import com.sosauce.chocola.data.datastore.PreferencesKeys.ANALYSE_ONLY_WHILE_CHARGING
@@ -16,9 +17,12 @@ import com.sosauce.chocola.data.datastore.PreferencesKeys.PAUSE_ON_MUTE
 import com.sosauce.chocola.data.datastore.PreferencesKeys.PLAYLIST_SORT
 import com.sosauce.chocola.data.datastore.PreferencesKeys.REGEX_FILTER
 import com.sosauce.chocola.data.datastore.PreferencesKeys.RUNNING_LENGTH_MINUTES
+import com.sosauce.chocola.data.datastore.PreferencesKeys.RUNNING_MAX_SLOW_DOWN
+import com.sosauce.chocola.data.datastore.PreferencesKeys.RUNNING_MAX_SPEED_UP
 import com.sosauce.chocola.data.datastore.PreferencesKeys.RUNNING_MODE_ENABLED
 import com.sosauce.chocola.data.datastore.PreferencesKeys.RUNNING_TARGET_CADENCE
 import com.sosauce.chocola.data.datastore.PreferencesKeys.RUNNING_TRACKING_MODE
+import lol.alphaliu01.runningmusic.cadence.ToleranceBand
 import lol.alphaliu01.runningmusic.cadence.steps.TrackingMode
 import com.sosauce.chocola.data.datastore.PreferencesKeys.SAF_TRACKS
 import com.sosauce.chocola.data.datastore.PreferencesKeys.SORT_ALBUMS_ASCENDING
@@ -128,21 +132,19 @@ class UserPreferences(
      * The running-mode settings, remembered between runs so a runner sets their
      * cadence once rather than every time they leave the house.
      */
-    fun getRunningSettings() = combine(
-        context.dataStore.data.map { it[RUNNING_TARGET_CADENCE] ?: DEFAULT_TARGET_CADENCE },
-        context.dataStore.data.map { it[RUNNING_LENGTH_MINUTES] ?: DEFAULT_RUN_LENGTH_MINUTES },
-        context.dataStore.data.map { prefs ->
+    fun getRunningSettings() = context.dataStore.data.map { prefs ->
+        RunningSettings(
+            targetCadence = prefs[RUNNING_TARGET_CADENCE] ?: DEFAULT_TARGET_CADENCE,
+            runLengthMinutes = prefs[RUNNING_LENGTH_MINUTES] ?: DEFAULT_RUN_LENGTH_MINUTES,
             // An unrecognised name falls back rather than throwing, so a
             // downgrade after a mode is added leaves the app usable.
-            prefs[RUNNING_TRACKING_MODE]
+            trackingMode = prefs[RUNNING_TRACKING_MODE]
                 ?.let { name -> TrackingMode.entries.firstOrNull { it.name == name } }
-                ?: DEFAULT_TRACKING_MODE
-        },
-    ) { cadence, minutes, mode ->
-        RunningSettings(
-            targetCadence = cadence,
-            runLengthMinutes = minutes,
-            trackingMode = mode,
+                ?: DEFAULT_TRACKING_MODE,
+            tolerance = ToleranceBand(
+                maxSpeedUp = prefs.stretchRatio(RUNNING_MAX_SPEED_UP, ToleranceBand.DEFAULT.maxSpeedUp),
+                maxSlowDown = prefs.stretchRatio(RUNNING_MAX_SLOW_DOWN, ToleranceBand.DEFAULT.maxSlowDown),
+            ),
         )
     }
 
@@ -150,6 +152,8 @@ class UserPreferences(
         it[RUNNING_TARGET_CADENCE] = settings.targetCadence
         it[RUNNING_LENGTH_MINUTES] = settings.runLengthMinutes
         it[RUNNING_TRACKING_MODE] = settings.trackingMode.name
+        it[RUNNING_MAX_SPEED_UP] = settings.tolerance.maxSpeedUp.toFloat()
+        it[RUNNING_MAX_SLOW_DOWN] = settings.tolerance.maxSlowDown.toFloat()
     }
 
     fun getRunningModeEnabled() = context.dataStore.data.map {
@@ -242,9 +246,24 @@ val DEFAULT_TRACKING_MODE = TrackingMode.MEASURE_THEN_LOCK
  * @property targetCadence what the runner set, and what the slider shows next
  * time. A sensor-driven run moves the live target without writing it here: a
  * measurement is what happened on one run, not a preference.
+ * @property tolerance how far a track may be stretched to be accepted into a
+ * run, in each direction independently.
  */
 data class RunningSettings(
     val targetCadence: Int,
     val runLengthMinutes: Int,
     val trackingMode: TrackingMode = DEFAULT_TRACKING_MODE,
+    val tolerance: ToleranceBand = ToleranceBand.DEFAULT,
 )
+
+/**
+ * A stored stretch ratio, kept inside what the maths can represent.
+ *
+ * Below 1.0 the band would be inverted and [ToleranceBand] would throw on
+ * construction; above [ToleranceBand.EVERYTHING] the octave windows already
+ * overlap, so a larger number cannot admit anything new. Either would have to
+ * come from a corrupted or hand-edited store, and neither is worth crashing on
+ * at startup.
+ */
+private fun Preferences.stretchRatio(key: Preferences.Key<Float>, fallback: Double): Double =
+    (this[key]?.toDouble() ?: fallback).coerceIn(1.0, ToleranceBand.EVERYTHING.widest)

@@ -156,7 +156,7 @@ private fun printRunPlan(library: List<Candidate<String>>, options: Options) {
     val worst = queue.worstBand
     if (worst == null) {
         println("  Nothing in the library is reachable within the ±%s ceiling."
-            .format(percentOf(ToleranceBand.CEILING.widest)))
+            .format(percentOf(ToleranceBand.DEFAULT.widest)))
     } else {
         println("  %d tracks, %s covered, worst stretch +%s / -%s".format(
             queue.tracks.size,
@@ -173,9 +173,9 @@ private fun printRunPlan(library: List<Candidate<String>>, options: Options) {
     // The nudge the Overview argues for: a cadence a few spm away that the
     // library actually supports is a better answer than a wider tolerance.
     val nearby = (options.cadence.toInt() - 10..options.cadence.toInt() + 10)
-        .map { it to coverageAt(library, it.toDouble(), ToleranceBand.CEILING) }
+        .map { it to coverageAt(library, it.toDouble(), ToleranceBand.DEFAULT) }
     val best = nearby.maxBy { it.second.accepted }
-    val here = coverageAt(library, options.cadence, ToleranceBand.CEILING)
+    val here = coverageAt(library, options.cadence, ToleranceBand.DEFAULT)
 
     if (best.second.accepted > here.accepted) {
         println()

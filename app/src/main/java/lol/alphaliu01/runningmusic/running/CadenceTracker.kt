@@ -22,10 +22,15 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import lol.alphaliu01.runningmusic.cadence.steps.CadenceLoop
+import lol.alphaliu01.runningmusic.cadence.steps.CounterReading
+import lol.alphaliu01.runningmusic.cadence.steps.CounterSample
+import lol.alphaliu01.runningmusic.cadence.steps.LoopConfig
 import lol.alphaliu01.runningmusic.cadence.steps.Motion
 import lol.alphaliu01.runningmusic.cadence.steps.RecordingHeader
 import lol.alphaliu01.runningmusic.cadence.steps.StepRecordingWriter
 import lol.alphaliu01.runningmusic.cadence.steps.StepSample
+import lol.alphaliu01.runningmusic.cadence.steps.StepSource
+import lol.alphaliu01.runningmusic.cadence.steps.stepTimestampsFrom
 import lol.alphaliu01.runningmusic.cadence.steps.TrackingMode
 import lol.alphaliu01.runningmusic.steps.RECORDINGS_DIR
 import lol.alphaliu01.runningmusic.steps.StepSensorCapabilities
@@ -71,6 +76,13 @@ data class CadenceTrackerState(
     val locked: Boolean = false,
     val steps: Int = 0,
     val recordingPath: String? = null,
+
+    /**
+     * Whether cadence is being counted from `TYPE_STEP_COUNTER` rather than
+     * timed from detector events. False means this phone has no counter and the
+     * detector had better be honest about firing once per step.
+     */
+    val counting: Boolean = false,
 )
 
 /**
@@ -88,9 +100,12 @@ data class CadenceTrackerState(
  * wakeup variant delivering through 61% CPU suspend under the same
  * `mediaPlayback` foreground service that PlaybackService already runs.
  *
- * No wakelock, deliberately. Holding one would make this work by keeping the
- * phone awake for the length of a run, which is a battery bill disguised as a
- * fix.
+ * Cadence is *counted*, not timed, wherever a step counter exists. Timing the
+ * gaps between detector events is the obvious approach, and it is only ever as
+ * good as the detector: a OnePlus PKX110 declares its detector SPECIAL_TRIGGER,
+ * meaning one event per step, then fires it on a 994.3 ms hardware tick no
+ * matter how fast its owner is moving. Every walk and every run on that phone
+ * measured 60.3 spm. See [stepTimestampsFrom].
  */
 class CadenceTracker(
     private val context: Context,
@@ -103,6 +118,16 @@ class CadenceTracker(
 
     private val pendingLock = Any()
     private val pending = mutableListOf<Long>()
+
+    /**
+     * The last counter reading, and whether the counter is the cadence source.
+     *
+     * Guarded by [pendingLock] because the reading is only ever touched from the
+     * sensor thread alongside [pending], and the two have to move together: a
+     * reading consumed without its steps being queued loses them.
+     */
+    private var lastCount: CounterReading? = null
+    private var counting = false
 
     private var sensorThread: HandlerThread? = null
     private var job: Job? = null
@@ -150,6 +175,20 @@ class CadenceTracker(
         // rousing a suspended CPU hands over about a second of steps at once, and
         // that should not be a frame's worth of work on the UI thread.
         val thread = HandlerThread("cadence-tracker").apply { start() }
+
+        synchronized(pendingLock) {
+            pending.clear()
+            lastCount = null
+            counting = false
+        }
+        nudge = Channel(Channel.CONFLATED)
+
+        // Opened before anything is registered, so that the counter's opening
+        // value is in the file. A counter reports on change and reports once on
+        // registration, and that first reading is the baseline every later delta
+        // is measured against; a recording missing it starts a reading late.
+        val recordingFile = startRecording(sensor)
+
         val registered = stepSensors.register(
             listener = this,
             sensor = sensor,
@@ -158,25 +197,45 @@ class CadenceTracker(
         )
 
         if (!registered) {
+            stopRecording()
             thread.quitSafely()
             _state.value = CadenceTrackerState(unavailable = CadenceUnavailable.REFUSED)
             return false
         }
 
-        sensorThread = thread
-        synchronized(pendingLock) { pending.clear() }
-        nudge = Channel(Channel.CONFLATED)
+        // The counter is the measurement and the detector is the heartbeat.
+        // Registering both costs one more listener and buys a cadence that does
+        // not depend on the detector firing once per step, which is a promise
+        // real hardware does not always keep.
+        val counter = stepSensors.counter(wakeUp = true) ?: stepSensors.counter(wakeUp = false)
+        val countingNow = counter != null && stepSensors.register(
+            listener = this,
+            sensor = counter,
+            batchLatencyUs = 0,
+            handler = Handler(thread.looper),
+        )
 
-        val recordingFile = startRecording(sensor)
+        sensorThread = thread
+        synchronized(pendingLock) {
+            counting = countingNow
+            // The handful of detector events from the moment between the two
+            // registrations are the wrong kind of step to hand a counting loop.
+            if (countingNow) pending.clear()
+        }
 
         _state.value = CadenceTrackerState(
             active = true,
             sensorName = sensor.name,
             wakeUp = sensor.isWakeUpSensor,
             recordingPath = recordingFile?.absolutePath,
+            counting = countingNow,
         )
 
-        Log.i(TAG, "Tracking ${sensor.name} (wakeUp=${sensor.isWakeUpSensor}), mode=$mode")
+        Log.i(
+            TAG,
+            "Tracking ${sensor.name} (wakeUp=${sensor.isWakeUpSensor}), mode=$mode, " +
+                if (countingNow) "counting from ${counter?.name}" else "timing detector events",
+        )
         job = scope.launch { run(mode, initialTarget, onTarget) }
         return true
     }
@@ -196,12 +255,23 @@ class CadenceTracker(
         }
 
         stopRecording()
-        synchronized(pendingLock) { pending.clear() }
+        synchronized(pendingLock) {
+            pending.clear()
+            lastCount = null
+            counting = false
+        }
         _state.value = CadenceTrackerState()
     }
 
     private suspend fun run(mode: TrackingMode, initialTarget: Int, onTarget: (Int) -> Unit) {
-        var loop = CadenceLoop(target = initialTarget, mode = mode)
+        val source = synchronized(pendingLock) {
+            if (counting) StepSource.COUNTED else StepSource.TIMED
+        }
+        var loop = CadenceLoop(
+            target = initialTarget,
+            mode = mode,
+            config = LoopConfig(source = source),
+        )
 
         while (currentCoroutineContext().isActive) {
             // Woken by delivery or by the timer, whichever comes first, so a
@@ -236,24 +306,61 @@ class CadenceTracker(
     }
 
     override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type != Sensor.TYPE_STEP_DETECTOR) return
-
-        synchronized(pendingLock) { pending += event.timestamp }
-        nudge.trySend(Unit)
-
         // The same run that drives the music writes the fixture that explains it
         // afterwards. Every run taken without this is a fixture not captured.
         val received = SystemClock.elapsedRealtimeNanos()
-        synchronized(writeLock) {
-            recording?.writeStep(StepSample(event.timestamp, received, uptimeNanos()))
+
+        when (event.sensor.type) {
+            Sensor.TYPE_STEP_DETECTOR -> {
+                // Queued for the loop only when there is no counter to do it
+                // better. Recorded either way: a detector that disagrees with the
+                // counter is the most useful thing a recording can contain.
+                synchronized(pendingLock) {
+                    if (!counting) pending += event.timestamp
+                }
+
+                synchronized(writeLock) {
+                    recording?.writeStep(
+                        StepSample(
+                            sensorTimestampNs = event.timestamp,
+                            receivedElapsedRealtimeNs = received,
+                            receivedUptimeNs = uptimeNanos(),
+                            reportedSteps = event.values.firstOrNull(),
+                        )
+                    )
+                }
+            }
+
+            Sensor.TYPE_STEP_COUNTER -> {
+                val value = event.values.firstOrNull() ?: return
+                val reading = CounterReading(event.timestamp, value)
+
+                synchronized(pendingLock) {
+                    pending += stepTimestampsFrom(lastCount, reading)
+                    lastCount = reading
+                }
+
+                synchronized(writeLock) {
+                    recording?.writeCounter(CounterSample(event.timestamp, received, value))
+                }
+            }
+
+            else -> return
         }
+
+        nudge.trySend(Unit)
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
-    /** Debug builds only: a release APK has no business writing files on a run. */
+    /**
+     * Off in a shipped release: an APK has no business writing files on a run
+     * unless it was built to. On in debug, and in a release built with
+     * `-Prunningmusic.recordRuns=true` for a test run that has to be
+     * diagnosable afterwards.
+     */
     private fun startRecording(sensor: Sensor): File? {
-        if (!BuildConfig.DEBUG) return null
+        if (!BuildConfig.RECORD_RUNS) return null
 
         return runCatching {
             val dir = File(context.getExternalFilesDir(null), RECORDINGS_DIR).apply { mkdirs() }

@@ -55,6 +55,18 @@ class StepSensors(context: Context) {
     fun detector(wakeUp: Boolean): Sensor? =
         sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR, wakeUp)
 
+    /**
+     * The cumulative step counter, which reports a total rather than an event
+     * per step.
+     *
+     * Worth having even where a detector exists, because a total survives what
+     * event timing does not: a detector that fires on a fixed hardware tick
+     * makes every cadence read the tick, while the same steps counted over the
+     * same window come out right.
+     */
+    fun counter(wakeUp: Boolean): Sensor? =
+        sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER, wakeUp)
+
     fun accelerometer(): Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
     /**

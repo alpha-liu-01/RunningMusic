@@ -25,7 +25,7 @@ class ToleranceBandTest {
         val fold = fold(bpm, 170.0)
 
         assertFalse(
-            ToleranceBand.CEILING.accepts(fold),
+            ToleranceBand.DEFAULT.accepts(fold),
             "$bpm bpm folded to speed ${fold.speed}, which the 1.15 ceiling should reject",
         )
         assertTrue(fold.absLogDeviation > 0.35, "expected a near-worst-case fold, got $fold")
@@ -40,12 +40,12 @@ class ToleranceBandTest {
     fun `coverage depends on where half the cadence lands`() {
         val onAPeak = fold(90.0, 180.0)
         assertEquals(1.0, onAPeak.speed, 1e-12)
-        assertTrue(ToleranceBand.CEILING.accepts(onAPeak))
+        assertTrue(ToleranceBand.DEFAULT.accepts(onAPeak))
 
         // The same track is a worse fit at 170, though still comfortably usable.
         val inATrough = fold(90.0, 170.0)
         assertTrue(inATrough.absLogDeviation > onAPeak.absLogDeviation)
-        assertTrue(ToleranceBand.CEILING.accepts(inATrough))
+        assertTrue(ToleranceBand.DEFAULT.accepts(inATrough))
     }
 
     /**
@@ -63,15 +63,23 @@ class ToleranceBandTest {
         )
     }
 
+    /**
+     * One window per reachable exponent, in exponent order. The k = -1 window
+     * sits above the cadence rather than below it: stepping every other beat
+     * needs a track at twice the tempo.
+     */
     @Test
     fun `bands for a cadence are one window per reachable exponent`() {
-        val bands = ToleranceBand.symmetric(1.2).bandsFor(170.0)
+        val bands = REACHABLE_EXPONENTS.zip(ToleranceBand.symmetric(1.2).bandsFor(170.0)).toMap()
 
-        assertEquals(2, bands.size)
-        assertEquals(170.0 / 1.2, bands[0].start, 1e-9)   // 141.67
-        assertEquals(170.0 * 1.2, bands[0].endInclusive, 1e-9) // 204.0
-        assertEquals(85.0 / 1.2, bands[1].start, 1e-9)    // 70.83
-        assertEquals(85.0 * 1.2, bands[1].endInclusive, 1e-9)  // 102.0
+        assertEquals(REACHABLE_EXPONENTS.count(), bands.size)
+
+        assertEquals(340.0 / 1.2, bands.getValue(-1).start, 1e-9)   // 283.33
+        assertEquals(340.0 * 1.2, bands.getValue(-1).endInclusive, 1e-9) // 408.0
+        assertEquals(170.0 / 1.2, bands.getValue(0).start, 1e-9)    // 141.67
+        assertEquals(170.0 * 1.2, bands.getValue(0).endInclusive, 1e-9)  // 204.0
+        assertEquals(85.0 / 1.2, bands.getValue(1).start, 1e-9)     // 70.83
+        assertEquals(85.0 * 1.2, bands.getValue(1).endInclusive, 1e-9)   // 102.0
     }
 
     /**

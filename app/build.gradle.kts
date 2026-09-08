@@ -31,6 +31,15 @@ val allowUnsignedRelease = providers
     .map(String::toBoolean)
     .getOrElse(false)
 
+// Step recording is on in debug and off in shipped releases. The flag exists so
+// a release build can be made to record for one test run: the loop's failures
+// are only diagnosable from a recording, and the interesting failures are the
+// ones that need R8 and a suspending CPU to show up at all.
+val recordRuns = providers
+    .gradleProperty("runningmusic.recordRuns")
+    .map(String::toBoolean)
+    .getOrElse(false)
+
 android {
     namespace = "com.sosauce.chocola"
     compileSdk = 37
@@ -102,10 +111,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            buildConfigField("boolean", "RECORD_RUNS", recordRuns.toString())
         }
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "debug"
+            buildConfigField("boolean", "RECORD_RUNS", "true")
         }
         compileOptions {
             sourceCompatibility = JavaVersion.VERSION_17

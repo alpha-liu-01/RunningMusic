@@ -46,6 +46,7 @@ import com.sosauce.chocola.R
 import com.sosauce.chocola.presentation.screens.playing.components.WavySlider
 import com.sosauce.chocola.utils.selfAlignHorizontally
 import com.sosauce.nekobites.animations.AnimatedFab
+import lol.alphaliu01.runningmusic.cadence.Fold
 import lol.alphaliu01.runningmusic.cadence.ToleranceBand
 import lol.alphaliu01.runningmusic.cadence.steps.Motion
 import lol.alphaliu01.runningmusic.cadence.steps.TrackingMode
@@ -54,6 +55,7 @@ import lol.alphaliu01.runningmusic.running.CadenceUnavailable
 import lol.alphaliu01.runningmusic.steps.hasStepPermission
 import lol.alphaliu01.runningmusic.steps.stepPermissionsToRequest
 import org.koin.androidx.compose.koinViewModel
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
@@ -110,6 +112,15 @@ fun RunningScreen(onNavigateBack: () -> Unit) {
             InfoCard(topDp = 4.dp, bottomDp = 4.dp) {
                 Coverage(ui, onUseSuggestion = viewModel::useSuggestedCadence)
             }
+
+            StretchCard(
+                topDp = 4.dp,
+                bottomDp = 4.dp,
+                tolerance = ui.settings.tolerance,
+                onSpeedUpChange = { viewModel.previewMaxSpeedUp(stretchRatio(it)) },
+                onSlowDownChange = { viewModel.previewMaxSlowDown(stretchRatio(it)) },
+                onSettled = viewModel::commitTolerance,
+            )
 
             ValueCard(
                 topDp = 4.dp,
@@ -258,6 +269,18 @@ private fun TrackingModes(ui: RunningUi, onSelect: (TrackingMode) -> Unit) {
         ui.tracking.active && !ui.tracking.wakeUp ->
             Muted(stringResource(R.string.running_tracking_nonwakeup))
     }
+
+    // Which sensor the cadence is actually coming from. Worth saying, because a
+    // detector that fires on a fixed tick reads the tick as the cadence and
+    // nothing else on this screen would give it away.
+    if (ui.tracking.active) {
+        Muted(
+            stringResource(
+                if (ui.tracking.counting) R.string.running_tracking_counted
+                else R.string.running_tracking_timed
+            )
+        )
+    }
 }
 
 private val TrackingMode.label: Int
@@ -279,7 +302,7 @@ private fun InProgress(ui: RunningUi) {
     val current = ui.run.current
     val summary = ui.run.summary
 
-    if (ui.tracking.active) Tracking(ui.tracking)
+    if (ui.tracking.active) Tracking(ui.tracking, ui.settings.targetCadence)
 
     if (current != null) {
         Text(
@@ -291,7 +314,7 @@ private fun InProgress(ui: RunningUi) {
             stringResource(
                 R.string.running_now_playing,
                 current.bpm,
-                current.stepsPerBeat,
+                gait(current.fold),
                 percent(current.speed)
             )
         )
@@ -319,25 +342,36 @@ private fun InProgress(ui: RunningUi) {
  * Shows the motion state rather than only the number, because "stopped" and
  * "walking" are the two moments when the music deliberately ignores what the
  * runner is doing, and a target that visibly refuses to move needs to say why.
+ *
+ * @param target the cadence the music is actually matched to, which is not the
+ * measurement and is not meant to be. The target follows at a few spm a minute
+ * so that a runner is not chased by their own music, so the two legitimately sit
+ * apart for minutes after a change of pace. Showing only the measurement, which
+ * this used to do even in the "matched to your N spm" line, made a track playing
+ * correctly at the older target look like arithmetic that did not add up.
  */
 @Composable
-private fun Tracking(tracking: CadenceTrackerState) {
+private fun Tracking(tracking: CadenceTrackerState, target: Int) {
     val measured = tracking.measuredSpm
 
     Text(
         when {
             measured == null -> stringResource(R.string.running_tracking_measuring)
-            tracking.locked -> stringResource(R.string.running_tracking_locked, spm(measured))
+            tracking.locked -> stringResource(R.string.running_tracking_locked, target)
             else -> stringResource(R.string.running_tracking_measured, spm(measured))
         }
     )
+
+    if (measured != null && abs(target - measured) >= 1.0) {
+        Muted(stringResource(R.string.running_tracking_catching_up, spm(measured)))
+    }
 
     Muted(
         stringResource(
             when (tracking.motion) {
                 Motion.STARTING -> R.string.running_motion_starting
-                Motion.RUNNING -> R.string.running_motion_running
-                Motion.WALKING -> R.string.running_motion_walking
+                Motion.MOVING -> R.string.running_motion_moving
+                Motion.IDLING -> R.string.running_motion_idling
                 Motion.STOPPED -> R.string.running_motion_stopped
                 Motion.SENSOR_LOST -> R.string.running_motion_sensor_lost
             }
@@ -361,6 +395,23 @@ private fun stretchOf(band: ToleranceBand?): String {
 }
 
 private fun percent(speed: Double) = "%.0f%%".format(speed * 100)
+
+/**
+ * How the runner's steps line up with the beat.
+ *
+ * Three cases rather than one number because a fold below unity is not "0.5
+ * steps per beat" to anybody: it is stepping every other beat, which is what
+ * lets a 125 bpm track carry a 62 spm walk.
+ */
+@Composable
+private fun gait(fold: Fold): String {
+    val (steps, beats) = fold.stepsToBeats
+    return when {
+        beats > 1 -> stringResource(R.string.running_gait_half)
+        steps == 1 -> stringResource(R.string.running_gait_single)
+        else -> stringResource(R.string.running_gait_multi, steps)
+    }
+}
 
 private fun elapsed(ms: Long) = DateUtils.formatElapsedTime(ms / 1000)
 
@@ -416,6 +467,89 @@ private fun ValueCard(
             Muted(description)
         }
     }
+}
+
+/**
+ * The two halves of the stretch tolerance, in one card because they are one
+ * decision.
+ *
+ * Split rather than offered as a single number because the two directions are
+ * not the same trade: speeding a track up adds energy that suits running, while
+ * slowing one down tends to drag. Someone who will happily take a track 15%
+ * fast may want almost nothing taken slow, and a symmetric control cannot say
+ * that.
+ */
+@Composable
+private fun StretchCard(
+    topDp: Dp,
+    bottomDp: Dp,
+    tolerance: ToleranceBand,
+    onSpeedUpChange: (Int) -> Unit,
+    onSlowDownChange: (Int) -> Unit,
+    onSettled: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surfaceContainer),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 2.dp),
+        shape = RoundedCornerShape(
+            topStart = topDp,
+            topEnd = topDp,
+            bottomStart = bottomDp,
+            bottomEnd = bottomDp
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(15.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(stringResource(R.string.running_stretch))
+
+            StretchSlider(
+                label = stringResource(R.string.running_stretch_faster),
+                percent = stretchPercent(tolerance.maxSpeedUp),
+                onChange = onSpeedUpChange,
+                onSettled = onSettled,
+            )
+            StretchSlider(
+                label = stringResource(R.string.running_stretch_slower),
+                percent = stretchPercent(tolerance.maxSlowDown),
+                onChange = onSlowDownChange,
+                onSettled = onSettled,
+            )
+
+            Muted(stringResource(R.string.running_stretch_desc))
+        }
+    }
+}
+
+@Composable
+private fun StretchSlider(
+    label: String,
+    percent: Int,
+    onChange: (Int) -> Unit,
+    onSettled: () -> Unit,
+) {
+    val animated by animateIntAsState(percent)
+    val sliderState = rememberSliderState(
+        value = percent.toFloat(),
+        valueRange = STRETCH_PERCENT_RANGE.first.toFloat()..STRETCH_PERCENT_RANGE.last.toFloat(),
+        onValueChangeFinished = onSettled
+    )
+    sliderState.onValueChange = { onChange(it.roundToInt()) }
+
+    LaunchedEffect(animated) { sliderState.value = animated.toFloat() }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(label, modifier = Modifier.weight(1f))
+        Text(stringResource(R.string.running_stretch_value, percent))
+    }
+    WavySlider(state = sliderState)
 }
 
 @Composable

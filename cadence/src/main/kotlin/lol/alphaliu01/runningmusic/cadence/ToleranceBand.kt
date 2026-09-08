@@ -65,7 +65,7 @@ data class ToleranceBand(
      */
     fun bandsFor(targetCadence: Double): List<ClosedFloatingPointRange<Double>> =
         REACHABLE_EXPONENTS.map { k ->
-            val octave = (1 shl k).toDouble()
+            val octave = octave(k)
             (targetCadence / (octave * maxSpeedUp))..(targetCadence * maxSlowDown / octave)
         }
 
@@ -73,14 +73,23 @@ data class ToleranceBand(
         fun symmetric(r: Double) = ToleranceBand(r, r)
 
         /**
-         * The widest band worth allowing, whatever the user asks for.
+         * Where the two stretch controls start.
          *
-         * A thin library should degrade by producing a shorter queue, not by
-         * producing unlistenable audio.
+         * A default rather than a limit. It used to be both, named CEILING, on
+         * the grounds that a thin library should degrade into a shorter queue
+         * rather than into unlistenable audio. That is still the right default,
+         * but it is the listener's call how far past it to go, so the setting
+         * runs all the way to [EVERYTHING].
          */
-        val CEILING = symmetric(1.15)
+        val DEFAULT = symmetric(1.15)
 
-        /** Wide enough that the windows tile, so every track is accepted. */
+        /**
+         * Wide enough that the windows tile, so every track is accepted.
+         *
+         * The widest setting the UI offers, and the widest that means anything:
+         * past here the bands for adjacent exponents overlap, so nothing new can
+         * be admitted however far the number is pushed.
+         */
         val EVERYTHING = symmetric(MAX_RESIDUAL)
 
         /**

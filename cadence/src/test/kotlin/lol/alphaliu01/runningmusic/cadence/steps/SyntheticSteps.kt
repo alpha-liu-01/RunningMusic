@@ -39,7 +39,7 @@ fun bursty(periodNs: Long = SECOND_NS, lagNs: Long = SECOND_NS) = Delivery { sen
  * Timestamps start well away from zero so that nothing can accidentally pass by
  * treating a boot-based clock as if it began at the run.
  */
-class StepStream(startNs: Long = 4_000 * SECOND_NS) {
+class StepStream(private val startNs: Long = 4_000 * SECOND_NS) {
 
     private val steps = mutableListOf<Long>()
     private var cursor = startNs
@@ -78,6 +78,34 @@ class StepStream(startNs: Long = 4_000 * SECOND_NS) {
 
     fun samples(delivery: Delivery = Immediate): List<StepSample> =
         steps.map { StepSample(sensorTimestampNs = it, receivedElapsedRealtimeNs = delivery.arrivalOf(it)) }
+
+    /**
+     * The same gait seen through a cumulative counter read every [periodNs].
+     *
+     * The counter's resolution is the read period, not the stride, which is the
+     * whole reason it survives hardware the detector does not: the reading says
+     * how many steps happened, and the timing of the individual steps inside the
+     * period never has to be recovered.
+     *
+     * @param startCount where the counter happens to be. It counts from boot, so
+     * a run joins it partway through and the absolute value means nothing.
+     */
+    fun counterSamples(
+        periodNs: Long = SECOND_NS,
+        startCount: Float = 12_345f,
+        delivery: Delivery = Immediate,
+    ): List<CounterSample> {
+        val readings = mutableListOf<CounterSample>()
+        var at = startNs
+        var taken = 0
+
+        while (at <= cursor) {
+            while (taken < steps.size && steps[taken] <= at) taken++
+            readings += CounterSample(at, delivery.arrivalOf(at), startCount + taken)
+            at += periodNs
+        }
+        return readings
+    }
 }
 
 /** Loads one of the recordings in `src/test/resources/fixtures`. */
@@ -90,6 +118,9 @@ object Fixtures {
 
     /** Five minutes at 177 spm with the CPU suspended for most of it. */
     const val RUN = "run4-wake-untethered-run.txt"
+
+    /** A walk whose detector fired on a 994.3 ms tick instead of on steps. */
+    const val TICKING_DETECTOR = "run5-oplus-detector-ticks.txt"
 
     fun load(name: String): StepRecording {
         val text = Fixtures::class.java.getResourceAsStream("/fixtures/$name")

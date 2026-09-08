@@ -32,22 +32,75 @@ enum class TrackingMode {
     /** Sample the natural cadence once, set the target, then hold it. */
     MEASURE_THEN_LOCK,
 
-    /** Measure and lock as above, then keep following, under every guard. */
+    /**
+     * Measure and lock as above, then keep following, under every guard.
+     *
+     * The guards bound how fast the target may move, not how far it may
+     * eventually get: a pace held long enough moves the anchor. Nothing may add
+     * a constant offset to the target in this mode, because the runner hears the
+     * target and synchronises to it, so a bias is integrated rather than
+     * absorbed and the two walk each other off the end of the range.
+     */
     CONTINUOUS,
+}
+
+/**
+ * Where the steps came from, which decides how the window is summarised.
+ *
+ * Not a detail: the two sources fail in opposite directions, so an estimator
+ * right for one is wrong for the other by several spm.
+ */
+enum class StepSource {
+    /**
+     * One event per step, summarised by the **median** gap.
+     *
+     * Detectors miss steps and occasionally emit two for one, and either makes a
+     * gap wrong by a factor of two. A mean carries that into the target; a
+     * median discards it. Recorded run 4 differs by 10 spm between the two, and
+     * the median is the one that matches the legs.
+     */
+    TIMED,
+
+    /**
+     * A cumulative count, summarised by the **mean** rate.
+     *
+     * A counter loses no steps, so there are no outliers to reject, and the
+     * median actively lies here. Counts arrive quantised to the read period — a
+     * 112 spm walk read every second is a run of 2-step readings sprinkled with
+     * 1-step ones — so most gaps are the period divided by the larger count and
+     * the median picks that, reading 120. The mean divides the steps by the time
+     * they took, which is the one thing a counter knows exactly.
+     */
+    COUNTED,
 }
 
 /**
  * What the runner appears to be doing.
  *
- * Everything except [RUNNING] holds the target where it is. The alternative is
+ * Everything except [MOVING] holds the target where it is. The alternative is
  * a runner who stops at a traffic light and finds the music collapsing to 0.6x
  * underneath them.
  */
 enum class Motion {
     /** No steps yet. A run that has only just begun. */
     STARTING,
-    RUNNING,
-    WALKING,
+
+    /**
+     * Travelling at a cadence worth matching, whether that is a run or a walk.
+     *
+     * Deliberately not split into running and walking. The loop's only real
+     * question is whether the steps arriving are steady locomotion, and a walk
+     * at 110 spm answers that exactly as well as a run at 180; treating the two
+     * differently is what made the target freeze for anyone who was not fast.
+     */
+    MOVING,
+
+    /**
+     * Stepping, but below [LoopConfig.movementFloorSpm]: pacing a kitchen,
+     * shuffling at a crossing. Real steps, not a cadence anyone wants music set
+     * to, so the target holds.
+     */
+    IDLING,
 
     /** Nothing for [LoopConfig.stallNs]. A kerb, a queue, a shoelace. */
     STOPPED,
@@ -62,15 +115,15 @@ enum class Motion {
  * @property windowNs how much history the measurement median covers. The
  * Overview asks for 30 to 60 seconds; a single stride is noise at any useful
  * resolution, and anything shorter turns a stumble into a tempo change.
- * @property measureWindowNs how much *running* has to accumulate before the
- * first lock. Counted as accumulated running time rather than wall time, so a
+ * @property measureWindowNs how much *movement* has to accumulate before the
+ * first lock. Counted as accumulated moving time rather than wall time, so a
  * traffic light in the first minute extends the measurement instead of
  * restarting or, worse, poisoning it.
  * @property minIntervals how many gaps the measurement median needs before it
  * will report at all. At 170 spm this is about eleven seconds.
- * @property classifyIntervals the much shorter median that decides running from
- * walking. Separate from the measurement median because classification has to
- * react in seconds while measurement has to be stable over a minute.
+ * @property classifyIntervals the much shorter median that decides movement
+ * from idling. Separate from the measurement median because classification has
+ * to react in seconds while measurement has to be stable over a minute.
  * @property deadbandSpm a measurement this close to the target does nothing.
  * @property maxDriftPerMinuteSpm the fastest the target may move once locked.
  * @property maxDriftFromLockSpm how far the target may ever get from the value
@@ -79,12 +132,18 @@ enum class Motion {
  * @property stallNs silence this long means stopped. Must comfortably exceed
  * the platform's delivery lag, which the sensor spike measured at up to two
  * seconds on a wakeup detector, or every batch boundary reads as a stop.
- * @property walkingFloorSpm below this the runner is walking, not running.
- * Defaults to the bottom of [cadenceRange] rather than to a separate figure for
- * walking, because the two questions are the same one: a cadence the app would
- * never be allowed to set as a target is not a cadence worth measuring. Pitched
- * lower it admits a brisk walk, which the recorded fixtures show reaching 137
- * spm and holding it long enough to look like a slow jog.
+ * @property movementFloorSpm below this the steps are not locomotion worth
+ * matching. Defaults to the bottom of [cadenceRange], because the two questions
+ * are the same one: a cadence the app would never be allowed to set as a target
+ * is not a cadence worth measuring.
+ *
+ * This floor used to sit at 140, on the theory that a brisk walk should not be
+ * mistaken for a slow run. It was the wrong theory twice over. Anyone moving
+ * below it had the target frozen for the whole run, and worse, a cadence
+ * hovering near it flipped in and out of [Motion.MOVING] every few seconds,
+ * which reset the measurement window each time and meant [measuredSpm] was
+ * never computed even once. All four recorded walk fixtures fail to produce a
+ * single measurement at 140 and lock cleanly at 60.
  */
 data class LoopConfig(
     val windowNs: Long = 45 * SECOND_NS,
@@ -94,10 +153,12 @@ data class LoopConfig(
     val deadbandSpm: Double = 3.0,
     val maxDriftPerMinuteSpm: Double = 4.0,
     val maxDriftFromLockSpm: Double = 10.0,
+    val reanchorNs: Long = 60 * SECOND_NS,
     val stallNs: Long = 8 * SECOND_NS,
     val sensorLostNs: Long = 45 * SECOND_NS,
-    val cadenceRange: IntRange = 140..200,
-    val walkingFloorSpm: Double = cadenceRange.first.toDouble(),
+    val cadenceRange: IntRange = 60..200,
+    val movementFloorSpm: Double = cadenceRange.first.toDouble(),
+    val source: StepSource = StepSource.TIMED,
 ) {
     init {
         require(windowNs > 0) { "windowNs must be positive, was $windowNs" }
@@ -113,12 +174,13 @@ data class LoopConfig(
         require(maxDriftFromLockSpm >= 0.0) {
             "maxDriftFromLockSpm must not be negative, was $maxDriftFromLockSpm"
         }
+        require(reanchorNs > 0) { "reanchorNs must be positive, was $reanchorNs" }
         require(stallNs > 0) { "stallNs must be positive, was $stallNs" }
         require(sensorLostNs >= stallNs) {
             "sensorLostNs ($sensorLostNs) must not precede stallNs ($stallNs)"
         }
-        require(walkingFloorSpm > 0.0) {
-            "walkingFloorSpm must be positive, was $walkingFloorSpm"
+        require(movementFloorSpm > 0.0) {
+            "movementFloorSpm must be positive, was $movementFloorSpm"
         }
         require(!cadenceRange.isEmpty()) { "cadenceRange must not be empty" }
     }
@@ -134,8 +196,11 @@ data class LoopConfig(
  * cannot honestly be answered. Not a fallback to the last known value; a stale
  * reading presented as a live one is how a stopped runner looks like a slow one.
  * @property locked whether the opening measurement has been taken.
- * @property baseline the target at the moment of the lock, and the centre of
- * the drift cap.
+ * @property baseline the centre of the drift cap. Set at the lock, and moved
+ * again whenever the runner holds a pace beyond the cap for long enough that
+ * refusing to follow it stops being caution and starts being wrong.
+ * @property awayFromBaselineNs how long the runner has been outside the cap
+ * without coming back, which is the only thing allowed to move [baseline].
  *
  * The remaining properties are bookkeeping, public only because the whole point
  * of this type is that a test can inspect and reconstruct any moment of a run.
@@ -149,8 +214,9 @@ data class CadenceLoop(
     val locked: Boolean = false,
     val baseline: Int? = null,
     val window: List<Long> = emptyList(),
-    val runningNs: Long = 0L,
-    val runningSinceStepNs: Long? = null,
+    val awayFromBaselineNs: Long = 0L,
+    val movingNs: Long = 0L,
+    val movingSinceStepNs: Long? = null,
     val startedNs: Long? = null,
     val lastStepArrivalNs: Long? = null,
     val lastAdvanceNs: Long? = null,
@@ -178,7 +244,7 @@ data class CadenceLoop(
         // unusually long gap between calls means the CPU was suspended, and a
         // suspended CPU cannot vouch for what the runner was doing; crediting it
         // in full would let one long sleep satisfy the whole measurement.
-        val credited = if (motion == Motion.RUNNING) minOf(elapsed, config.stallNs) else 0L
+        val credited = if (motion == Motion.MOVING) minOf(elapsed, config.stallNs) else 0L
 
         val newest = window.lastOrNull()
         val fresh = steps.sorted().filter { newest == null || it > newest }
@@ -193,8 +259,9 @@ data class CadenceLoop(
         val started = startedNs ?: nowNs
         val silence = (nowNs - (arrival ?: started)).coerceAtLeast(0L)
 
-        val classified = trimmed.medianSpm(
+        val classified = trimmed.windowSpm(
             atLeast = config.classifyIntervals,
+            source = config.source,
             limit = config.classifyIntervals,
         )
 
@@ -202,27 +269,53 @@ data class CadenceLoop(
             silence >= config.sensorLostNs -> Motion.SENSOR_LOST
             arrival == null -> Motion.STARTING
             silence >= config.stallNs -> Motion.STOPPED
-            classified != null && classified < config.walkingFloorSpm -> Motion.WALKING
-            else -> Motion.RUNNING
+            classified != null && classified < config.movementFloorSpm -> Motion.IDLING
+            else -> Motion.MOVING
         }
 
-        // The measurement only ever sees one unbroken stretch of running. Left
-        // to span a break it would average a walk into a run, which is the same
+        // The measurement only ever sees one unbroken stretch of movement. Left
+        // to span a break it would average a stop into a pace, which is the same
         // mistake as collapsing the target at a traffic light, just slower.
-        val runningSince = when {
-            motion != Motion.RUNNING -> null
-            this.motion == Motion.RUNNING -> runningSinceStepNs ?: trimmed.firstOrNull()
+        val movingSince = when {
+            motion != Motion.MOVING -> null
+            this.motion == Motion.MOVING -> movingSinceStepNs ?: trimmed.firstOrNull()
             else -> trimmed.lastOrNull()
         }
 
-        val measured = if (runningSince == null) {
+        val measured = if (movingSince == null) {
             null
         } else {
-            trimmed.filter { it >= runningSince }.medianSpm(atLeast = config.minIntervals)
+            trimmed.filter { it >= movingSince }
+                .windowSpm(atLeast = config.minIntervals, source = config.source)
         }
 
-        val accumulated = runningNs + credited
-        val decided = decide(nowNs, motion, measured, accumulated)
+        // A cap anchored to the opening measurement cannot follow a runner who
+        // drops into a walk, or who spends ten minutes climbing: the target
+        // holds near a pace they have plainly left, and the further they get
+        // from it the more the music insists on the pace they started at.
+        // Sustained time spent beyond the cap moves the anchor, so the cap keeps
+        // bounding how *fast* the target may move without also deciding, from
+        // the opening minute, how fast the rest of the run is allowed to be.
+        // A brief excursion cannot do it: the clock resets the moment the runner
+        // comes back inside, so only a pace held for [LoopConfig.reanchorNs]
+        // counts, and the rate limit still governs the way over.
+        // Re-anchored onto the target rather than onto the measurement. Moving it
+        // to the measurement would recentre the cap somewhere the target is not,
+        // and the cap is applied by clamping, so the target would be yanked a
+        // full cap's width in one tick — the rate limit bypassed by the very
+        // mechanism meant to bound it. Recentring on the target moves nothing by
+        // itself; it only lets the target carry on creeping, and strays again a
+        // minute later if the runner is still out there. The result ratchets
+        // toward a sustained new pace at the rate limit and no faster.
+        val strayed = locked &&
+            baseline != null &&
+            measured != null &&
+            abs(measured - baseline) > config.maxDriftFromLockSpm
+        val strayedFor = if (strayed) awayFromBaselineNs + credited else 0L
+        val anchor = if (strayedFor >= config.reanchorNs) target else baseline
+
+        val accumulated = movingNs + credited
+        val decided = decide(nowNs, motion, measured, accumulated, anchor)
 
         return copy(
             motion = motion,
@@ -231,8 +324,9 @@ data class CadenceLoop(
             baseline = decided.baseline,
             target = decided.target,
             window = trimmed,
-            runningNs = accumulated,
-            runningSinceStepNs = runningSince,
+            awayFromBaselineNs = if (anchor != baseline) 0L else strayedFor,
+            movingNs = accumulated,
+            movingSinceStepNs = movingSince,
             startedNs = started,
             lastStepArrivalNs = arrival,
             lastAdvanceNs = nowNs,
@@ -245,10 +339,13 @@ data class CadenceLoop(
         motion: Motion,
         measured: Double?,
         accumulated: Long,
+        anchor: Int?,
     ): Decision {
-        val held = Decision(target, baseline, locked, lastMoveNs)
+        // Carries [anchor] rather than [baseline], so a re-anchor sticks even on
+        // a tick where the target itself is held.
+        val held = Decision(target, anchor, locked, lastMoveNs)
         if (mode == TrackingMode.MANUAL) return held
-        if (motion != Motion.RUNNING || measured == null) return held
+        if (motion != Motion.MOVING || measured == null) return held
 
         val low = config.cadenceRange.first.toDouble()
         val high = config.cadenceRange.last.toDouble()
@@ -274,7 +371,7 @@ data class CadenceLoop(
 
         val since = lastMoveNs?.let { (nowNs - it).coerceAtLeast(0L) } ?: 0L
         val allowance = config.maxDriftPerMinuteSpm * since / MINUTE_NS
-        val centre = (baseline ?: target).toDouble()
+        val centre = (anchor ?: target).toDouble()
 
         val moved = (target + (candidate - target).coerceIn(-allowance, allowance))
             .coerceIn(centre - config.maxDriftFromLockSpm, centre + config.maxDriftFromLockSpm)
@@ -284,7 +381,7 @@ data class CadenceLoop(
         // An allowance too small to survive rounding leaves lastMoveNs alone, so
         // the next call has a longer interval to spend and the target creeps
         // rather than freezing.
-        return if (moved == target) held else Decision(moved, baseline, true, nowNs)
+        return if (moved == target) held else Decision(moved, anchor, true, nowNs)
     }
 
     private data class Decision(
@@ -296,29 +393,39 @@ data class CadenceLoop(
 }
 
 /**
- * The median cadence of the most recent [limit] gaps, or null if there are
- * fewer than [atLeast] of them.
+ * The cadence of the most recent [limit] gaps, or null if there are fewer than
+ * [atLeast] of them.
  *
- * A median rather than a mean throughout. Step detectors miss steps and
- * occasionally emit two for one, and either produces a gap wrong by a factor of
- * two; a mean carries that into the target, a median discards it.
+ * [StepSource] decides whether that is the median gap or the mean one, and the
+ * choice is worth several spm in both directions.
  */
-private fun List<Long>.medianSpm(atLeast: Int, limit: Int = Int.MAX_VALUE): Double? {
+private fun List<Long>.windowSpm(
+    atLeast: Int,
+    source: StepSource,
+    limit: Int = Int.MAX_VALUE,
+): Double? {
     if (size < 2) return null
 
     val intervals = zipWithNext { a, b -> b - a }
     val considered = if (intervals.size > limit) intervals.takeLast(limit) else intervals
     if (considered.size < atLeast) return null
 
-    val sorted = considered.sorted()
+    val typical = when (source) {
+        StepSource.TIMED -> considered.median()
+        StepSource.COUNTED -> considered.sum().toDouble() / considered.size
+    }
+
+    return if (typical <= 0.0) null else 60_000_000_000.0 / typical
+}
+
+private fun List<Long>.median(): Double {
+    val sorted = sorted()
     val middle = sorted.size / 2
-    val median = if (sorted.size % 2 == 1) {
+    return if (sorted.size % 2 == 1) {
         sorted[middle].toDouble()
     } else {
         (sorted[middle - 1] + sorted[middle]) / 2.0
     }
-
-    return if (median <= 0.0) null else 60_000_000_000.0 / median
 }
 
 /**

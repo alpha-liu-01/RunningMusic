@@ -75,7 +75,7 @@ fun <T> suggestCadence(
     around: Double,
     radius: Double = SUGGESTION_RADIUS_SPM,
     step: Double = 1.0,
-    band: ToleranceBand = ToleranceBand.CEILING,
+    band: ToleranceBand = ToleranceBand.DEFAULT,
 ): CadenceSuggestion {
     require(around > 0.0 && around.isFinite()) {
         "around must be positive and finite, was $around"

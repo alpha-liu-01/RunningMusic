@@ -13,6 +13,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!--
+      The player holds a partial wake lock while playing, so a non-wakeup step
+      detector keeps delivering with the screen off. See PlaybackService.
+    -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!--
       Tempo analysis runs as a foreground worker so a library-wide pass the user
       asked for survives the app being backgrounded. dataSync is the type
       WorkManager uses, and from API 34 it needs its own permission.

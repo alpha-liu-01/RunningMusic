@@ -74,7 +74,7 @@ class RunQueueTest {
         assertEquals(2, queue.tracks.size)
         assertEquals(2 * FIVE_MINUTES, queue.filledMs)
         assertEquals(30 * 60_000L - 2 * FIVE_MINUTES, queue.shortfallMs)
-        assertTrue(queue.worstBand!!.widest <= ToleranceBand.CEILING.widest)
+        assertTrue(queue.worstBand!!.widest <= ToleranceBand.DEFAULT.widest)
     }
 
     @Test
@@ -105,7 +105,7 @@ class RunQueueTest {
     }
 
     @Test
-    fun `a wider ceiling admits more of the library`() {
+    fun `a wider band admits more of the library`() {
         val library = listOf(track("awkward", 145.0)) // speed 1.1724 at 170 spm
 
         val tight = selectForRun(library, CADENCE, runLengthMs = FIVE_MINUTES)
@@ -113,7 +113,7 @@ class RunQueueTest {
             library,
             CADENCE,
             runLengthMs = FIVE_MINUTES,
-            ceiling = ToleranceBand.symmetric(1.2),
+            band = ToleranceBand.symmetric(1.2),
         )
 
         assertTrue(tight.tracks.isEmpty())

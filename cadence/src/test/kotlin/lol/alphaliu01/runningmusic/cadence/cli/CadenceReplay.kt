@@ -1,8 +1,10 @@
 package lol.alphaliu01.runningmusic.cadence.cli
 
 import lol.alphaliu01.runningmusic.cadence.steps.CadenceLoop
+import lol.alphaliu01.runningmusic.cadence.steps.countedSteps
 import lol.alphaliu01.runningmusic.cadence.steps.LoopConfig
 import lol.alphaliu01.runningmusic.cadence.steps.Motion
+import lol.alphaliu01.runningmusic.cadence.steps.StepSource
 import lol.alphaliu01.runningmusic.cadence.steps.TrackingMode
 import lol.alphaliu01.runningmusic.cadence.steps.parseStepRecording
 import lol.alphaliu01.runningmusic.cadence.steps.replay
@@ -36,6 +38,16 @@ fun main(args: Array<String>) {
     val tickNs = (args.option("--tick")?.toDoubleOrNull() ?: 5.0).toNanos()
     val verbose = args.contains("--verbose")
 
+    // The thresholds worth arguing about, sweepable without a rebuild. Whether a
+    // cadence counts as locomotion is the whole question for a walk.
+    val defaults = LoopConfig()
+    val low = args.option("--low")?.toIntOrNull() ?: defaults.cadenceRange.first
+    val high = args.option("--high")?.toIntOrNull() ?: defaults.cadenceRange.last
+    val config = defaults.copy(
+        cadenceRange = low..high,
+        movementFloorSpm = args.option("--floor")?.toDoubleOrNull() ?: low.toDouble(),
+    )
+
     val files = args.filterNot { it.startsWith("--") }
         .filterNot { it.toDoubleOrNull() != null }
         .flatMap { path ->
@@ -47,7 +59,8 @@ fun main(args: Array<String>) {
     if (files.isEmpty()) {
         println(
             "usage: cadenceReplay <file-or-dir>... " +
-                "[--mode continuous|lock|manual] [--target 170] [--tick 5] [--verbose]"
+                "[--mode continuous|lock|manual] [--target 170] [--tick 5] " +
+                "[--low 60] [--high 200] [--floor <spm>] [--verbose]"
         )
         return
     }
@@ -58,11 +71,19 @@ fun main(args: Array<String>) {
         println("=".repeat(78))
         runCatching { parseStepRecording(file.readText()) }
             .onSuccess { recording ->
-                if (recording.steps.isEmpty()) {
+                // The counter wins where it exists, for the same reason it wins
+                // on the phone: detector event timing is only as honest as the
+                // detector, and some of them tick on a fixed period.
+                val counted = countedSteps(recording.counter)
+                val samples = counted.ifEmpty { recording.steps }
+                if (samples.isEmpty()) {
                     println("  no steps recorded")
                     return@onSuccess
                 }
-                replayOne(recording.steps, mode, target, tickNs, verbose)
+                val source =
+                    if (counted.isEmpty()) StepSource.TIMED else StepSource.COUNTED
+                println("  source: ${source.name.lowercase()} (${samples.size} steps)")
+                replayOne(samples, mode, target, tickNs, verbose, config.copy(source = source))
             }
             .onFailure { println("  unreadable: ${it.message}") }
         println()
@@ -75,6 +96,7 @@ private fun replayOne(
     target: Int,
     tickNs: Long,
     verbose: Boolean,
+    config: LoopConfig,
 ) {
     val start = samples.minOf { it.receivedElapsedRealtimeNs }
 
@@ -84,7 +106,7 @@ private fun replayOne(
     var previous: CadenceLoop? = null
     var lastPrintedNs = Long.MIN_VALUE
 
-    val settled = CadenceLoop(target = target, mode = mode, config = LoopConfig())
+    val settled = CadenceLoop(target = target, mode = mode, config = config)
         .replay(samples, tickNs = tickNs) { nowNs, loop ->
             val changed = previous == null ||
                 loop.motion != previous!!.motion ||
@@ -122,7 +144,7 @@ private fun replayOne(
     val baseline = settled.baseline
     println(
         "  verdict      " + when {
-            !settled.locked -> "never locked — no unbroken minute of running"
+            !settled.locked -> "never locked — no unbroken minute of movement"
             mode == TrackingMode.MEASURE_THEN_LOCK -> "locked at $baseline spm and held"
             else -> "locked at $baseline spm, finished at ${settled.target} spm " +
                 "(drift ${settled.target - (baseline ?: 0)})"
@@ -132,8 +154,8 @@ private fun replayOne(
 
 private fun Motion.explain() = when (this) {
     Motion.STARTING -> "waiting for the first step"
-    Motion.RUNNING -> "running"
-    Motion.WALKING -> "walking — target held"
+    Motion.MOVING -> "moving"
+    Motion.IDLING -> "barely moving — target held"
     Motion.STOPPED -> "stopped — target held"
     Motion.SENSOR_LOST -> "sensor lost — target held"
 }

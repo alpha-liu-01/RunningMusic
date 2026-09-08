@@ -16,8 +16,12 @@ package lol.alphaliu01.runningmusic.cadence.steps
 
 const val STEP_RECORDING_FORMAT = "runningmusic-step-recording"
 
-/** 2 added the uptime clock to `S` lines. Version 1 files still parse. */
-const val STEP_RECORDING_VERSION = 2
+/**
+ * 2 added the uptime clock to `S` lines. 3 added the detector's reported step
+ * count to them and `C` lines for the step counter. Older files still parse,
+ * and older readers skip what they do not know.
+ */
+const val STEP_RECORDING_VERSION = 3
 
 class StepRecordingFormatException(message: String) : IllegalArgumentException(message)
 
@@ -59,10 +63,31 @@ data class StepSample(
     val sensorTimestampNs: Long,
     val receivedElapsedRealtimeNs: Long,
     val receivedUptimeNs: Long? = null,
+    val reportedSteps: Float? = null,
 ) {
     /** How long the event sat in a buffer before we saw it. */
     val deliveryLagNs: Long get() = receivedElapsedRealtimeNs - sensorTimestampNs
 }
+
+/**
+ * One reading of `TYPE_STEP_COUNTER`, whose value is cumulative since boot.
+ *
+ * Recorded alongside the detector because the two disagree on hardware that
+ * matters. A OnePlus PKX110 was found emitting detector events on a 994.3 ms
+ * hardware tick no matter how fast its owner was moving, so the gap between two
+ * events measured the tick and every cadence came out as 60 spm. A cumulative
+ * count cannot fail that way: throttling delays it but never loses steps, so
+ * the number taken over a window is right even when the timing of the
+ * individual events is not.
+ *
+ * @property steps the counter's own value, a float by the platform's choice
+ * rather than ours.
+ */
+data class CounterSample(
+    val sensorTimestampNs: Long,
+    val receivedElapsedRealtimeNs: Long,
+    val steps: Float,
+)
 
 data class AccelSample(
     val timestampNs: Long,
@@ -75,6 +100,7 @@ data class StepRecording(
     val header: RecordingHeader,
     val steps: List<StepSample>,
     val accel: List<AccelSample>,
+    val counter: List<CounterSample> = emptyList(),
 ) {
     /** Gaps between consecutive steps, by the sensor's clock. */
     fun stepIntervalsNs(): List<Long> =
@@ -145,7 +171,20 @@ class StepRecordingWriter(private val out: Appendable) {
         // Omitted rather than zero-filled when absent, so the field's presence
         // is itself the signal and no value has to be reserved as a sentinel.
         sample.receivedUptimeNs?.let { out.append(' ').append(it.toString()) }
+        // Only meaningful once the uptime clock is there to hold its place, and
+        // it always is: nothing writes version 3 without writing version 2.
+        sample.reportedSteps?.let { out.append(' ').append(it.toString()) }
         out.append('\n')
+    }
+
+    fun writeCounter(sample: CounterSample) {
+        out.append("C ")
+            .append(sample.sensorTimestampNs.toString())
+            .append(' ')
+            .append(sample.receivedElapsedRealtimeNs.toString())
+            .append(' ')
+            .append(sample.steps.toString())
+            .append('\n')
     }
 
     fun writeAccel(sample: AccelSample) {
@@ -183,6 +222,7 @@ fun parseStepRecording(lines: Sequence<String>): StepRecording {
     val header = mutableMapOf<String, String>()
     val steps = mutableListOf<StepSample>()
     val accel = mutableListOf<AccelSample>()
+    val counter = mutableListOf<CounterSample>()
 
     for (raw in lines) {
         val line = raw.trim()
@@ -202,7 +242,20 @@ fun parseStepRecording(lines: Sequence<String>): StepRecording {
                 val sensorNs = fields[1].toLongOrNull() ?: continue
                 val receivedNs = fields[2].toLongOrNull() ?: continue
                 // Absent in version 1 recordings, which stay readable.
-                steps += StepSample(sensorNs, receivedNs, fields.getOrNull(3)?.toLongOrNull())
+                steps += StepSample(
+                    sensorTimestampNs = sensorNs,
+                    receivedElapsedRealtimeNs = receivedNs,
+                    receivedUptimeNs = fields.getOrNull(3)?.toLongOrNull(),
+                    reportedSteps = fields.getOrNull(4)?.toFloatOrNull(),
+                )
+            }
+
+            "C" -> {
+                if (fields.size < 4) continue
+                val sensorNs = fields[1].toLongOrNull() ?: continue
+                val receivedNs = fields[2].toLongOrNull() ?: continue
+                val value = fields[3].toFloatOrNull() ?: continue
+                counter += CounterSample(sensorNs, receivedNs, value)
             }
 
             "A" -> {
@@ -217,7 +270,7 @@ fun parseStepRecording(lines: Sequence<String>): StepRecording {
         }
     }
 
-    return StepRecording(header.toRecordingHeader(), steps, accel)
+    return StepRecording(header.toRecordingHeader(), steps, accel, counter)
 }
 
 private fun Map<String, String>.toRecordingHeader(): RecordingHeader {

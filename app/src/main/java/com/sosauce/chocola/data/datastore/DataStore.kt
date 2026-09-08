@@ -9,6 +9,7 @@ import androidx.datastore.core.DataMigration
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
@@ -157,6 +158,14 @@ data object PreferencesKeys {
      */
     val RUNNING_TRACKING_MODE = stringPreferencesKey("RUNNING_TRACKING_MODE")
 
+    /**
+     * The two halves of the stretch tolerance, stored as the ratios the cadence
+     * maths uses rather than as the percentages the screen shows: 1.15 for "up
+     * to 15% faster". Kept apart because they are genuinely independent — adding
+     * energy by speeding a track up is not the same trade as dragging one down.
+     */
+    val RUNNING_MAX_SPEED_UP = floatPreferencesKey("RUNNING_MAX_SPEED_UP")
+    val RUNNING_MAX_SLOW_DOWN = floatPreferencesKey("RUNNING_MAX_SLOW_DOWN")
 }
 
 

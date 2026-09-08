@@ -57,7 +57,7 @@ class CadenceLoopTest {
         val settled = loop(TrackingMode.MEASURE_THEN_LOCK).replay(recording.steps)
 
         assertTrue(settled.locked, "five minutes of running should have locked")
-        assertEquals(Motion.RUNNING, settled.motion)
+        assertEquals(Motion.MOVING, settled.motion)
         assertTrue(
             abs(settled.target - 187) <= 3,
             "expected a target near the recorded median stride of 187 spm, " +
@@ -67,46 +67,92 @@ class CadenceLoopTest {
 
     /**
      * Runs 2 and 3 were recorded at walking pace, which was a limitation of the
-     * spike and is now the most valuable thing about them. A walk must never
-     * become a target, or the first traffic light of a run permanently halves
-     * the tempo of the music.
+     * spike and is now the most valuable thing about them: they are the only
+     * recordings of the pace this loop used to be blind to.
+     *
+     * Both walk at around 100 spm, and both must produce a target at that
+     * cadence rather than sitting on the slider forever.
      */
     @Test
-    fun `never locks onto a recorded walk`() {
+    fun `locks onto a recorded walk at the pace it was walked`() {
         for (name in listOf(Fixtures.WALK, Fixtures.WALK_REPEAT)) {
+            val recording = Fixtures.load(name)
+
+            val settled = loop(TrackingMode.CONTINUOUS).replay(recording.steps)
+            val baseline = assertNotNull(settled.baseline, "$name never locked")
+
+            assertTrue(
+                abs(baseline - 103) <= 8,
+                "$name locked at $baseline, expected the recorded walking cadence",
+            )
+        }
+    }
+
+    /**
+     * The regression that sent the feature out of the door broken, kept as the
+     * narrowest possible test of it.
+     *
+     * The floor used to be 140, and a walk sits below it. That alone would have
+     * frozen the target, which was bad enough, but the real damage was quieter:
+     * a cadence hovering near the floor crossed it every few seconds, and every
+     * crossing reset the stretch of movement the measurement median is taken
+     * over. The median needs thirty intervals to report at all, so it never
+     * reported. On all four walk fixtures `measuredSpm` was null at every single
+     * tick, for the entire recording, and the screen showed a run that was never
+     * measuring anything.
+     *
+     * So this asserts the measurement exists and the classification is steady,
+     * not that the target is any particular number.
+     */
+    @Test
+    fun `measures a walk instead of flickering in and out of movement`() {
+        for (name in listOf(Fixtures.WALK, Fixtures.WALK_REPEAT, Fixtures.TETHERED_WALK)) {
             val recording = Fixtures.load(name)
 
             val frames = loop(TrackingMode.CONTINUOUS).timeline(recording.steps)
             val settled = frames.last().loop
 
-            // Asserted over the whole replay rather than at the final tick. A
-            // walk contains bursts quick enough to read as running for a few
-            // seconds, and that is fine; what must never happen is those bursts
-            // adding up to a lock.
-            assertTrue(frames.any { it.loop.motion == Motion.WALKING }, name)
-            assertFalse(settled.locked, "$name locked onto a walk")
-            assertTrue(frames.all { it.loop.target == SLIDER }, "$name moved the target")
+            assertNotNull(settled.measuredSpm, "$name never produced a measurement")
+            assertFalse(
+                frames.any { it.loop.motion == Motion.IDLING },
+                "$name still drops out of movement mid-walk",
+            )
         }
     }
 
     /**
-     * The hardest of the recordings, and the one that set the walking floor.
+     * A brisk walk, median stride 137 spm, recorded tethered.
      *
-     * This is a brisk walk whose median stride is 137 spm, with stretches well
-     * above that. Against a floor pitched at a textbook walking cadence of 130
-     * it looked like running for long enough to lock, and the loop committed to
-     * a 150 spm target for a walk. The floor is now the bottom of the cadence
-     * range, on the grounds that a reading the app would refuse to set as a
-     * target has no business being measured as one.
+     * This was the recording that set the old floor at 140: pitched any lower,
+     * it locked, and locking onto a walk was thought to be the failure. It is
+     * now the expected behaviour, and the number it produces is its own cadence
+     * rather than the 150 an earlier floor of 130 drew out of it.
      */
     @Test
-    fun `does not mistake a brisk walk for a slow run`() {
+    fun `locks onto a brisk walk at its own cadence`() {
         val recording = Fixtures.load(Fixtures.TETHERED_WALK)
 
         val settled = loop(TrackingMode.CONTINUOUS).replay(recording.steps)
+        val baseline = assertNotNull(settled.baseline, "never locked onto a 137 spm walk")
 
-        assertFalse(settled.locked, "locked onto a 137 spm walk")
-        assertEquals(SLIDER, settled.target)
+        assertTrue(abs(baseline - 137) <= 4, "locked at $baseline, expected near 137")
+    }
+
+    /**
+     * Steps that are not going anywhere: pacing a kitchen, shuffling at a
+     * crossing. Below the floor the target still has to hold, or the music
+     * follows someone standing about down to the bottom of the range.
+     */
+    @Test
+    fun `holds the target for steps too slow to be going anywhere`() {
+        val gait = StepStream().steady(40.0, seconds = 300)
+
+        val frames = loop(TrackingMode.CONTINUOUS).timeline(gait.samples())
+        val settled = frames.last().loop
+
+        assertEquals(Motion.IDLING, settled.motion)
+        assertFalse(settled.locked, "locked onto someone standing about")
+        assertTrue(frames.all { it.loop.target == SLIDER }, "the target moved")
     }
 
     /** Twenty-eight seconds is not a measurement, and must not be treated as one. */
@@ -127,25 +173,81 @@ class CadenceLoopTest {
      * runner which makes faster music, and a loop that simply follows will chase
      * a runner all the way to the top of its range.
      *
-     * Here the runner accelerates from 170 to 220 spm over ten minutes. The
-     * target is allowed to move, but never further from the locked baseline than
-     * the drift cap, so the runaway terminates instead of compounding.
+     * What prevents it is not the drift cap. The cap used to pin the target
+     * within 10 spm of the opening minute for the rest of the run, which stopped
+     * a runaway by also refusing every genuine change of pace. What actually
+     * prevents it is that the target never *leads*: it moves toward the measured
+     * cadence and never past it, so the music is only ever somewhere the runner
+     * has already been, and a loop that cannot get ahead cannot pull.
      */
     @Test
-    fun `refuses to chase a runner who keeps speeding up`() {
+    fun `never gets ahead of a runner who keeps speeding up`() {
         val gait = StepStream().ramp(170.0, 220.0, seconds = 600)
+
+        val frames = loop(TrackingMode.CONTINUOUS).timeline(gait.samples())
+        val settled = frames.last().loop
+
+        assertTrue(settled.locked)
+
+        for (frame in frames.filter { it.loop.locked }) {
+            val measured = frame.loop.measuredSpm ?: continue
+            // Plus one for the rounding to whole spm at the lock, which can put
+            // the target half a step above the reading it was taken from.
+            assertTrue(
+                frame.loop.target <= measured + 1,
+                "target ${frame.loop.target} got ahead of the runner's $measured spm",
+            )
+        }
+
+        assertTrue(
+            settled.target < 220,
+            "the target caught the runner's top speed at ${settled.target}",
+        )
+    }
+
+    /**
+     * The drift cap bounds how fast the target may move, not how far it may
+     * eventually get.
+     *
+     * A runner who finishes at a walk used to be held near the pace they opened
+     * with for the rest of the run: the cap was anchored to the first minute and
+     * 50 spm of genuine slowing did not fit inside it, so the music stayed where
+     * they had plainly stopped being. Holding a pace moves the anchor, and the
+     * music arrives late but correct.
+     */
+    @Test
+    fun `follows a runner who drops to a walk and stays there`() {
+        val gait = StepStream()
+            .steady(170.0, seconds = 90)
+            .steady(120.0, seconds = 900)
+
+        val settled = loop(TrackingMode.CONTINUOUS).replay(gait.samples())
+
+        assertTrue(settled.locked)
+        assertTrue(
+            abs(settled.target - 120) <= 4,
+            "fifteen minutes of walking at 120 spm left the target at ${settled.target}",
+        )
+    }
+
+    /**
+     * Only a pace held counts. A burst shorter than the re-anchor window leaves
+     * the anchor alone, so a hill or a sprint for a crossing does not redefine
+     * the run.
+     */
+    @Test
+    fun `a brief burst does not move the anchor`() {
+        val gait = StepStream()
+            .steady(170.0, seconds = 90)
+            .steady(205.0, seconds = 30)
+            .steady(170.0, seconds = 180)
 
         val settled = loop(TrackingMode.CONTINUOUS).replay(gait.samples())
         val baseline = assertNotNull(settled.baseline)
 
-        assertTrue(settled.locked)
         assertTrue(
-            settled.target <= baseline + settled.config.maxDriftFromLockSpm,
-            "target ${settled.target} escaped the drift cap around $baseline",
-        )
-        assertTrue(
-            settled.target < 190,
-            "the runner reached 220 spm and the loop followed to ${settled.target}",
+            abs(baseline - 170) <= 5,
+            "a thirty-second burst moved the anchor to $baseline",
         )
     }
 
@@ -220,11 +322,19 @@ class CadenceLoopTest {
     }
 
     /**
-     * A walking break, which differs from a stop only in that steps keep coming.
-     * A loop that watched for silence alone would happily lock onto 110 spm.
+     * A walking break in the middle of a run, which differs from a stop only in
+     * that steps keep coming.
+     *
+     * Now that a walk is a cadence the loop will measure, the target does follow
+     * this down, and it should: a runner who drops to a walk for a minute and a
+     * half has changed pace. What must not happen is the music arriving at
+     * walking pace, and what prevents that is the rate limit rather than any
+     * judgement about gait. A 65 spm drop cannot be absorbed inside a break this
+     * short at a few spm a minute, however long the loop is left to think about
+     * it, so the break costs the run a nudge downward and nothing more.
      */
     @Test
-    fun `holds the target through a walking break`() {
+    fun `a walking break moves the target no faster than the rate limit`() {
         val gait = StepStream()
             .steady(175.0, seconds = 90)
             .steady(110.0, seconds = 90)
@@ -232,12 +342,10 @@ class CadenceLoopTest {
 
         val frames = loop(TrackingMode.CONTINUOUS).timeline(gait.samples())
         val locked = frames.first { it.loop.locked }.loop.target
+        val lowest = frames.filter { it.loop.locked }.minOf { it.loop.target }
 
-        assertTrue(frames.any { it.loop.motion == Motion.WALKING }, "the walk was not noticed")
-        assertTrue(
-            frames.filter { it.loop.locked }.all { abs(it.loop.target - locked) <= 1 },
-            "the target followed the walk down to ${frames.minOf { it.loop.target }}",
-        )
+        assertTrue(lowest > 150, "the music followed the walk down to $lowest spm")
+        assertTrue(lowest < locked, "the target ignored the walk entirely, at $lowest spm")
     }
 
     /**
@@ -300,7 +408,7 @@ class CadenceLoopTest {
         val direct = loop(TrackingMode.CONTINUOUS).replay(gait.samples(Immediate))
         val batched = loop(TrackingMode.CONTINUOUS).replay(gait.samples(bursty()))
 
-        assertEquals(Motion.RUNNING, batched.motion)
+        assertEquals(Motion.MOVING, batched.motion)
         assertEquals(direct.target, batched.target)
     }
 
@@ -347,8 +455,8 @@ class CadenceLoopTest {
 
         assertTrue(lockedAt > 0, "never locked")
         assertTrue(
-            frames[lockedAt].loop.runningNs >= 60 * SECOND_NS,
-            "locked after only ${frames[lockedAt].loop.runningNs / SECOND_NS}s of running",
+            frames[lockedAt].loop.movingNs >= 60 * SECOND_NS,
+            "locked after only ${frames[lockedAt].loop.movingNs / SECOND_NS}s of running",
         )
     }
 
@@ -389,7 +497,7 @@ class CadenceLoopTest {
 
         val settled = loop(TrackingMode.CONTINUOUS).replay(skewed)
 
-        assertEquals(Motion.RUNNING, settled.motion)
+        assertEquals(Motion.MOVING, settled.motion)
         assertTrue(settled.locked)
         assertTrue(abs(settled.target - 175) <= 2, "got ${settled.target}")
     }
