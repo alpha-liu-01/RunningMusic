@@ -29,6 +29,7 @@ import lol.alphaliu01.runningmusic.cadence.fold
 import lol.alphaliu01.runningmusic.cadence.foldAt
 import lol.alphaliu01.runningmusic.cadence.rebaseTail
 import lol.alphaliu01.runningmusic.cadence.selectForRun
+import lol.alphaliu01.runningmusic.cadence.uncoveredRunMs
 import lol.alphaliu01.runningmusic.cadence.steps.LoopConfig
 import lol.alphaliu01.runningmusic.cadence.steps.TrackingMode
 import lol.alphaliu01.runningmusic.cadence.suggestCadence
@@ -123,7 +124,7 @@ data class RunningState(
  * carries on playing; anything in the UI layer stops being told about track
  * transitions at that point, and the speed would freeze wherever the last
  * foreground track left it. The service hands its player over with [attach] and
- * calls [onTransition], so a run continues with nothing on screen.
+ * calls [onTransition] and [onQueueEnded], so a run continues with nothing on screen.
  *
  * Everything that touches the player is confined to the main thread, which is
  * the looper Media3 built it on.
@@ -598,6 +599,10 @@ class RunningModeManager(
      * the queue over without routing through [playNow]. Nothing in the UI should
      * be able to do that any more, so reaching this means plan and player have
      * lost sync, and carrying on would be worse than stopping.
+     *
+     * Entering the last planned track is the moment to top up, so extra matches
+     * that finished analysing mid-run appear in Up Next rather than after a
+     * gap of silence. [onQueueEnded] is the backstop if nothing was added.
      */
     suspend fun onTransition(mediaId: String?) {
         if (!_state.value.active) return
@@ -618,9 +623,85 @@ class RunningModeManager(
 
             if (added.isNotEmpty()) player.addMediaItems(added.map { it.ref.toMediaItem() })
 
-            publish(active = true, shortfall = null)
-            materialised.current?.let { ramp(it.fold.speed.toFloat()) }
+            val shortfall = if (materialised.cursor == materialised.size - 1) {
+                appendUnused(player, materialised)
+            } else {
+                null
+            }
+
+            publish(active = true, shortfall = shortfall)
+            plan?.current?.let { ramp(it.fold.speed.toFloat()) }
         }
+    }
+
+    /**
+     * The last queued item finished. Media3 reports [Player.STATE_ENDED] and
+     * does not fire a transition, so this is the only signal that the plan has
+     * actually run out.
+     *
+     * If unused matching tracks still fit in the requested length they are
+     * appended and playback continues; otherwise the run ends. Leftover matches
+     * past that length stay unused: the duration slider is the contract.
+     */
+    suspend fun onQueueEnded() {
+        if (!_state.value.active) return
+
+        withContext(Dispatchers.Main.immediate) {
+            val player = this@RunningModeManager.player
+            val previous = plan
+            if (player == null || previous == null) {
+                endRun()
+                return@withContext
+            }
+
+            val firstNew = previous.size
+            val shortfall = appendUnused(player, previous)
+            val extended = plan
+            if (extended != null && extended.size > firstNew) {
+                player.seekTo(firstNew, 0)
+                player.play()
+                publish(active = true, shortfall = shortfall)
+                extended.tracks[firstNew].let { ramp(it.fold.speed.toFloat()) }
+                return@withContext
+            }
+
+            // onTransition may have appended while this track was still
+            // playing. STATE_ENDED should not fire in that case, but if it
+            // does, do not tear the run down on top of a queue that continues.
+            if (player.hasNextMediaItem()) return@withContext
+
+            endRun()
+        }
+    }
+
+    /**
+     * Unused matching tracks that still fit in the requested length, appended
+     * to the player. Returns the leftover shortfall after that attempt: zero
+     * when the minutes are already covered, the uncovered remainder when the
+     * unused library could not fill it, or null when there are no settings to
+     * plan against.
+     */
+    private fun appendUnused(player: Player, previous: RunPlan<CuteTrack>): Long? {
+        val settings = _state.value.settings ?: return null
+        val remaining = uncoveredRunMs(
+            filledMs = previous.filledMs,
+            runLengthMs = settings.runLengthMinutes * MINUTE_MS,
+        )
+        if (remaining == 0L) return 0L
+
+        val spokenFor = previous.tracks.mapTo(mutableSetOf()) { it.ref.mediaId }
+        val topUp = selectForRun(
+            library = library.value.filterNot { it.ref.mediaId in spokenFor },
+            targetCadence = settings.targetCadence.toDouble(),
+            runLengthMs = remaining,
+            band = settings.tolerance,
+        )
+        if (topUp.tracks.isEmpty()) return topUp.shortfallMs
+
+        val shuffled = topUp.tracks.shuffled()
+        plan = previous.append(shuffled)
+        player.addMediaItems(shuffled.map { it.ref.toMediaItem() })
+        return topUp.shortfallMs
     }
 
     /** Ends the run and hands the player back at its normal speed. */

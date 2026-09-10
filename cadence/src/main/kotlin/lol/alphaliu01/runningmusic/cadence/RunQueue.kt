@@ -95,9 +95,21 @@ fun <T> selectForRun(
     return RunQueue(
         tracks = chosen,
         filledMs = filledMs,
-        shortfallMs = (runLengthMs - filledMs).coerceAtLeast(0L),
+        shortfallMs = uncoveredRunMs(filledMs, runLengthMs),
         worstBand = chosen.worstBand(),
     )
+}
+
+/**
+ * How much of [runLengthMs] is still uncovered by [filledMs].
+ *
+ * Zero once the plan already covers the requested length, even if unused
+ * matching tracks exist. Those leftovers belong to a longer run, not this one.
+ */
+fun uncoveredRunMs(filledMs: Long, runLengthMs: Long): Long {
+    require(filledMs >= 0) { "filledMs must not be negative, was $filledMs" }
+    require(runLengthMs >= 0) { "runLengthMs must not be negative, was $runLengthMs" }
+    return (runLengthMs - filledMs).coerceAtLeast(0L)
 }
 
 /**

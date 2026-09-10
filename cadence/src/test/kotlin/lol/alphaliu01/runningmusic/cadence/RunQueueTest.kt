@@ -165,6 +165,94 @@ class RunQueueTest {
     }
 }
 
+class UncoveredRunMsTest {
+
+    @Test
+    fun `a plan that already covers the requested length has nothing left to fill`() {
+        assertEquals(0L, uncoveredRunMs(filledMs = 30 * 60_000, runLengthMs = 30 * 60_000))
+        assertEquals(0L, uncoveredRunMs(filledMs = 31 * 60_000, runLengthMs = 30 * 60_000))
+    }
+
+    @Test
+    fun `a short plan leaves the uncovered minutes as remaining budget`() {
+        assertEquals(10 * 60_000L, uncoveredRunMs(filledMs = 20 * 60_000, runLengthMs = 30 * 60_000))
+    }
+
+    @Test
+    fun `an empty plan leaves the whole run uncovered`() {
+        assertEquals(30 * 60_000L, uncoveredRunMs(filledMs = 0, runLengthMs = 30 * 60_000))
+    }
+
+    @Test
+    fun `rejects negative arguments`() {
+        assertFailsWith<IllegalArgumentException> { uncoveredRunMs(filledMs = -1, runLengthMs = 1) }
+        assertFailsWith<IllegalArgumentException> { uncoveredRunMs(filledMs = 0, runLengthMs = -1) }
+    }
+
+    /**
+     * Leftover matching tracks after the duration is covered stay unused. The
+     * remaining budget is zero, so selectForRun on the unused remainder yields
+     * an empty queue even though the library still has songs that would fit.
+     */
+    @Test
+    fun `unused matching tracks are not selected once the minutes are covered`() {
+        val planned = listOf(track("a", 170.0), track("b", 85.0))
+        val unused = listOf(track("c", 170.0), track("d", 175.0))
+        val remaining = uncoveredRunMs(
+            filledMs = 2 * FIVE_MINUTES,
+            runLengthMs = 2 * FIVE_MINUTES,
+        )
+
+        val topUp = selectForRun(unused, CADENCE, remaining)
+
+        assertEquals(0L, remaining)
+        assertTrue(topUp.tracks.isEmpty())
+        assertContentEquals(listOf("a", "b"), selectForRun(planned, CADENCE, 2 * FIVE_MINUTES).tracks.map { it.ref })
+    }
+
+    /**
+     * A thin opening plan, plus tracks that became usable later (finished
+     * analysis, or a cadence that now reaches them): the leftover minutes
+     * pull from the unused remainder, and still never take a track twice.
+     */
+    @Test
+    fun `unused remainder fills a shortfall and skips tracks already in the plan`() {
+        val planned = listOf(track("a", 170.0))
+        val later = listOf(
+            track("a", 170.0),
+            track("b", 85.0),
+            track("c", 175.0),
+        )
+        val spokenFor = planned.map { it.ref }.toSet()
+        val remaining = uncoveredRunMs(
+            filledMs = FIVE_MINUTES,
+            runLengthMs = 3 * FIVE_MINUTES,
+        )
+
+        val topUp = selectForRun(
+            library = later.filterNot { it.ref in spokenFor },
+            targetCadence = CADENCE,
+            runLengthMs = remaining,
+        )
+
+        assertContentEquals(listOf("b", "c"), topUp.tracks.map { it.ref })
+        assertEquals(0L, topUp.shortfallMs)
+    }
+
+    @Test
+    fun `a leftover shortfall stays a shortfall when the unused remainder cannot fill it`() {
+        val remaining = uncoveredRunMs(filledMs = FIVE_MINUTES, runLengthMs = 3 * FIVE_MINUTES)
+        val topUp = selectForRun(
+            library = listOf(track("awkward", 125.0)),
+            targetCadence = CADENCE,
+            runLengthMs = remaining,
+        )
+
+        assertTrue(topUp.tracks.isEmpty())
+        assertEquals(remaining, topUp.shortfallMs)
+    }
+}
+
 class RebaseTailTest {
 
     private val library = listOf(

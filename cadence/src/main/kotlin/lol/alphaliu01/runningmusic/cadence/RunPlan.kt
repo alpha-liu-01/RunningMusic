@@ -35,6 +35,9 @@ data class RunPlan<T>(
 
     val current: Selected<T>? get() = tracks.getOrNull(cursor)
 
+    /** Stretched playing time of the whole plan, including what has already played. */
+    val filledMs: Long get() = tracks.sumOf { it.stretchedDurationMs }
+
     /**
      * Stretched playing time from the current track to the end of the plan.
      *

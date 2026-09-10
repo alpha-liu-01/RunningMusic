@@ -103,6 +103,14 @@ class RunPlanTest {
         assertEquals(THREE_MINUTES, plan.advanceTo { it == "c" }.remainingMs)
     }
 
+    @Test
+    fun `filled time is the whole plan, including what has already played`() {
+        val plan = planOf("a", "b", "c").advanceTo { it == "c" }
+
+        assertEquals(3 * THREE_MINUTES, plan.filledMs)
+        assertEquals(THREE_MINUTES, plan.remainingMs)
+    }
+
     /**
      * Replanning is what a moved cadence triggers, and it must never interrupt
      * the track in progress.
