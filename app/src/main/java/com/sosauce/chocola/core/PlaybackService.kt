@@ -70,6 +70,18 @@ class PlaybackService : MediaLibraryService(), KoinComponent {
             lifecycleScope.launch { runningMode.onTransition(mediaItem?.mediaId) }
         }
 
+        /**
+         * Last-item end does not fire [onMediaItemTransition]. Without this the
+         * run stays active with the music stopped: sensors still running, End
+         * run still on screen. The manager either extends the plan or ends it.
+         */
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            super.onPlaybackStateChanged(playbackState)
+            if (playbackState == Player.STATE_ENDED) {
+                lifecycleScope.launch { runningMode.onQueueEnded() }
+            }
+        }
+
 
         @SuppressLint("UnsafeOptInUsageError")
         override fun onAudioSessionIdChanged(audioSessionId: Int) {
